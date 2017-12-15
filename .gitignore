@@ -1,5 +1,8 @@
 # Prerequisites
 *.d
+*.yy.c
+*.tab.c
+*.tab.h
 
 # Object files
 *.o
@@ -50,3 +53,5 @@ modules.order
 Module.symvers
 Mkfile.old
 dkms.conf
+pxed
+retv
