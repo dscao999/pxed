@@ -8,7 +8,10 @@ endif
 CFLAGS = -Wall -D_GNU_SOURCE -g
 LDFLAGS = -g
 
-all:	pxed retv
+all:	pxed retv pxem
+
+pxem:	pxe_monitor.o dhcp.o miscs.o
+	$(LINK.o) $^ -o $@
 
 pxed:	pxe_server.o pxe_util.o dhcp.o pxe_config.tab.o lex.yy.o
 	$(LINK.o) $^ -o $@
@@ -16,9 +19,6 @@ pxed:	pxe_server.o pxe_util.o dhcp.o pxe_config.tab.o lex.yy.o
 retv:	retrieve.o dhcp.o
 	$(LINK.o) $^ -o $@
 
-pxe_server.o:	pxe_util.h dhcp.h misc.h
-pxe_util.o:	pxe_util.h dhcp.h misc.h
-dhcp.o:		dhcp.h misc.h
 lex.yy.o:	pxe_config.tab.h
 
 lex.yy.c:	pxe_config.lex

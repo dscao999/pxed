@@ -1,146 +1,193 @@
+#include <stdio.h>
 #include <string.h>
-#include <time.h>
-#include <sys/time.h>
+#include <stdarg.h>
+#include <errno.h>
+#include <assert.h>
+#include <stdlib.h>
+#include "miscs.h"
 #include "dhcp.h"
 
-void dhcp_dump_macaddr(const dhcp_packet_t *packet, FILE *outf)
-{
-	int i;
+static const uint8 dhcp_cookie[] = {99, 130, 83, 99};
+static const char PXE_ID[] = "PXEClient";
 
-	outlog(outf, "mac address: ");
-	for (i = 0; i < packet->hlen - 1; i++)
-		outlog(outf, "%X:", packet->chaddr[i]);
-	outlog(outf, "%X\n", packet->chaddr[i]);
+int dhcp_valid(const struct dhcp_data *dhdat)
+{
+	if (dhdat->len < sizeof(struct dhcp_packet))
+		return 0;
+	return memcmp(dhdat->dhpkt.header.magic_cookie, dhcp_cookie, 4) == 0;
 }
 
-static void dump_option(const dhcp_option_t *opt, int verbose, FILE *outf)
+int dhcp_pxe(const struct dhcp_data *dhdat)
 {
-        int i;
-	const uint8 *bytes;
-	const dhcp_option_t *vendor_opts;
+	const struct dhcp_option *cls;
+	int retv = 0;
 
-	if (opt->code == 0) return;
-
-        outlog(outf, "option: %d, len: %d\n", opt->code, opt->len);
-        if (verbose && opt->len) {
-		if(opt->code != 43) {
-	                outlog(outf, "   option bytes: ");
-			for (i = 0; i < opt->len; i++) {
-				outlog(outf, "%x ", opt->vals[i]);
-				if ((i+1) % 25 == 0) outlog(outf, "\n      ");
-			}
-			if (i % 25 != 0) outlog(outf, "\n");
-		} else {
-			outlog(outf, "begin vendor options: \n", outf);
-			bytes = opt->vals;
-			vendor_opts = (dhcp_option_t *)bytes;
-			do {
-				dump_option(vendor_opts, verbose, outf);
-				bytes = vendor_opts->vals + vendor_opts->len;
-				vendor_opts = (dhcp_option_t *)bytes;
-			} while (vendor_opts->code != 255 &&
-				 bytes < opt->vals + opt->len);
-			outlog(outf, "end vendor options\n");
-		}
-			
-        }
-
+	cls = dhcp_option_search(dhdat, DHCP_CLASS);
+	if (cls && cls->len == 32)
+		retv = memcmp(cls->val, PXE_ID, sizeof(PXE_ID)) == 0;
+	return retv;
 }
 
-const dhcp_option_t *dhcp_option_search(const dhcp_buff_t *dhcp, int opt)
+const struct dhcp_option *
+dhcp_option_search(const struct dhcp_data *dhdat, int opt)
 {
-	const dhcp_option_t *option;;
-	int found;
+	const struct dhcp_option *option;;
+	const struct dhcp_packet *dhpkt = &dhdat->dhpkt;
+	int found, len = dhdat->len;
 
 	found = 0;
-	option = (const dhcp_option_t *)dhcp->packet->options;
+	option = dhdat->dhpkt.options;
 	do {
 		if (option->code == opt) {
 			found = 1;
 			break;
 		}
-		option = dhcp_option_next(option);
-	} while ((void *)option - (void *)dhcp->packet < dhcp->len
-			&& option->code != 255);
-	if (!found) option = NULL;
+		option = dhcp_option_cnext(option);
+	} while (option != NULL && ((void *)option - (void *)dhpkt < len));
+	if (!found)
+		option = NULL;
 
 	return option;
 } 
 
-const dhcp_option_t *dhcp_vendopt_search(const dhcp_buff_t *buff, int opt)
+static int llog(const char *fmt, ...)
 {
-	const dhcp_option_t *option, *vopt;
-	int found = 0;
+	va_list ap;
+	int len;
 
-	option = NULL;
-	vopt = dhcp_option_search(buff, DHVENDOR);
-	if (!vopt) goto z_exit;
-
-	option = (dhcp_option_t *)vopt->vals;
-	do {
-		if (option->code == opt) {
-			found = 1;
-			break;
-		}
-		option = dhcp_option_next(option);
-	} while ((void *)option - (void *)vopt->vals < vopt->len &&
-		option->code != 255);
-	if (!found) option = NULL;
-
-z_exit:
-	return option;
+	va_start(ap, fmt);
+	len = vprintf(fmt, ap);
+	va_end(ap);
+	return len;
 }
 
-int dhcp_get_uuid(const dhcp_buff_t *buff, uint8 uuid[16])
+static inline int dhcp_echo_ip(const unsigned int ip)
 {
-	int retv;
-	const dhcp_option_t *option;
+	return llog("%d.%d.%d.%d", ip & 0x0ff, (ip >> 8) & 0x0ff,
+			(ip >> 16) & 0x0ff, (ip >> 24) & 0x0ff);
+}
 
-	retv = 0;
-	option = dhcp_option_search(buff, DHCMUID);
-	if (option && option->vals[0] == 0) {
-		retv = 1;
-		memcpy(uuid, option->vals+1, 16);
+static int dhcp_echo_chaddr(const uint8 chaddr[16])
+{
+	int len, i;
+	const uint8 *ch;
+
+	len = llog("DHCP chaddr:");
+	for (i = 0, ch = chaddr; i < 16; i++, ch++)
+		len += llog(" %02hhX", *ch);
+	len += llog("\n");
+	return len;
+}
+
+static int dhcp_echo_sname(const char sname[64])
+{
+	int len, i;
+	const char *ch;
+
+	len = llog("Server Name: ");
+	for (i = 0, ch = sname; i < 64 && *ch != 0; i++, ch++)
+		len += llog("%c", *ch);
+	len += llog("\n");
+	return len;
+}
+
+static int dhcp_echo_bfile(const char bfile[128])
+{
+	int len, i;
+	const char *ch;
+
+	len = llog("Boot File: ");
+	for (i = 0, ch = bfile; i < 128 && *ch != 0; i++, ch++)
+		len += llog("%c", *ch);
+	len += llog("\n");
+	return len;
+}
+
+static void dhcp_echo_head(const struct dhcp_packet *dhpkt)
+{
+	const struct dhcp_head *hdr = &dhpkt->header;
+
+	if (hdr->op == 1)
+		llog("Boot Request Packet:\n");
+	else if (hdr->op == 2)
+		llog("Boot Reply Packet:\n");
+	llog("OP: %02hhX HType: %02hhX HLen: 3%hhd Hoops: %2hhd\n",
+			hdr->op, hdr->htype, hdr->hlen, hdr->hops);
+	llog("XID: %08X\n", hdr->xid);
+	llog("Secs: %hd, Flags: %hX\n", hdr->secs, hdr->flags);
+	llog("Client IP: ");
+	dhcp_echo_ip(hdr->ciaddr);
+	llog(" Your IP: ");
+	dhcp_echo_ip(hdr->yiaddr);
+	llog(" Server IP: ");
+	dhcp_echo_ip(hdr->siaddr);
+	llog(" Gate Way: ");
+	dhcp_echo_ip(hdr->giaddr);
+	llog("\n");
+
+	dhcp_echo_chaddr(hdr->chaddr);
+	dhcp_echo_sname(hdr->sname);
+	dhcp_echo_bfile(hdr->bootfile);
+
+	llog("Cookie: %hhu.%hhu.%hhu.%hhu\n", hdr->magic_cookie[0],
+			hdr->magic_cookie[1], hdr->magic_cookie[2],
+			hdr->magic_cookie[3]);
+}
+
+static int dhcp_echo_option(const struct dhcp_option *opt)
+{
+	int len, i;
+	char *buf;
+
+	len = 0;
+	switch(opt->code) {
+	case 0:
+		break;
+	case 1:
+		assert(opt->len == 4);
+		len = llog("Subnet Mask: %hhu.%hhu.%hhu.%hhu\n", opt->val[0],
+				opt->val[1], opt->val[2], opt->val[3]);
+		break;
+	case 12:
+		buf = malloc(opt->len + 1);
+		memcpy(buf, opt->val, opt->len);
+		*(buf+opt->len) = 0;
+		len = llog("Client Host Name: %s\n", buf);
+		free(buf);
+		break;
+	default:
+		len = llog("Option: %u, Length: %u, Vals:", opt->code,
+				opt->len);
+		for (i = 0; i < opt->len; i++)
+			len += llog(" %02hhX", opt->val[i]);
+		len += llog("\n");
+		break;
 	}
-	return retv;
-}
-		
-const dhcp_option_t *dhcp_pxe_request(const dhcp_buff_t *dhcp)
-{
-	const dhcp_option_t *option, *retopt;
-
-	retopt = NULL;
-	if (!dhcp_valid_packet(dhcp->packet) ||
-		dhcp->packet->op != 1) goto z_exit;
-	retopt = dhcp_option_search(dhcp, DHMSGTYPE);
-	if (retopt->vals[0] != 1 && retopt->vals[0] != 3) {
-		retopt = NULL;
-		goto z_exit;
-	}
-	option = dhcp_option_search(dhcp, DHCLASS);
-	if (!option || option->len < 9 ||
-		memcmp(option->vals, "PXEClient", 9) != 0)
-		retopt = NULL;
-
-z_exit:
-	return retopt;
+	return len;
 }
 
-void dhcp_dump_packet(const dhcp_buff_t *dhcp_buff, FILE *outf)
+void dhcp_echo_packet(const struct dhcp_data *dhdat)
 {
-	const dhcp_option_t *option;
-	const dhcp_packet_t *dhcp;
-	char string[48];
-	int pos, len;
-	char date[48];
+	const struct dhcp_packet *dhcp;
+	const struct dhcp_option *opt;
 
-	len = dhcp_buff->len;
-	dhcp = dhcp_buff->packet;
-	if (!dhcp_valid_packet(dhcp)) {
-		outlog(outf, "Not a valid DHCP packet!\n");
-		dhcp_dump_macaddr(dhcp, outf);
+	dhcp = &dhdat->dhpkt;
+	if (!dhcp_valid(dhdat)) {
+		printf("Not a valid DHCP packet!\n");
 		return;
 	}
+
+	dhcp_echo_head(dhcp);
+	if (dhdat->len == sizeof(struct dhcp_packet))
+		return;
+	opt = dhcp->options;
+	while (opt) {
+		dhcp_echo_option(opt);
+		opt = dhcp_option_cnext(opt);
+	}
+}
+/*
+
 	option = dhcp_option_search(dhcp_buff, DHCLASS);
 	if (!option || option->len < 9 || 
 		memcmp(option->vals, "PXEClient", 9) != 0) {
@@ -177,4 +224,4 @@ void dhcp_dump_packet(const dhcp_buff_t *dhcp_buff, FILE *outf)
 		string[option->len] = 0;
 		outlog(outf, "PXE Mark: %s\n", string);
 	}
-}
+}*/

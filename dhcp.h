@@ -1,29 +1,18 @@
 #ifndef DHCP_DSCAO__
 #define DHCP_DSCAO__
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <netdb.h>
-#include <string.h>
-#include "misc.h"
 
-#define PACKET_LEN      1536
-
-enum dh_options {DHPAD = 0, DHCLASS = 60, DHSVRNAME = 66, DHBOOTFILE = 67,
-	DHVENDOR = 43, DHMSGTYPE = 53, DHSVRID = 54, DHMAXLEN = 57, DHCUUID = 61,
-	DHCLARCH = 93, DHCMUID = 97, DHEND = 255 };
-enum dhpxe_options {PXEDISCTL = 6, PXEBOOTSVR = 8, PXEBOOTMENU = 9,
-	PXEBOOTPROMPT = 10, PXEBOOTITEM = 71, PXEEND = 255};
+enum dhcp_code {DHCP_PAD = 0, DHCP_CLASS = 60, DHCP_SVRNAME = 66,
+	DHCP_BOOTFILE = 67, DHCP_VENDOR = 43, DHCP_MSGTYPE = 53,
+	DHCP_SVRID = 54, DHCP_MAXLEN = 57, DHCP_CUUID = 61,
+	DHCP_CLARCH = 93, DHCP_CMUID = 97, DHCP_END = 255 };
+enum pxe_code {PXE_DISCTL = 6, PXE_BOOTSVR = 8, PXE_BOOTMENU = 9,
+	PXE_BOOTPROMPT = 10, PXE_BOOTITEM = 71, PXE_END = 255};
 
 typedef unsigned char uint8;
 typedef unsigned short uint16;
 typedef unsigned int uint32;
 
-typedef union noalign16 {
-	uint8 pad[2];
-	uint16 val;
-} noalign16_t;
-
-typedef struct dhcp_packet {
+struct dhcp_head {
 	uint8 op;
 	uint8 htype;
 	uint8 hlen;
@@ -36,69 +25,62 @@ typedef struct dhcp_packet {
 	uint32 siaddr;
 	uint32 giaddr;
 	uint8 chaddr[16];
-	char   sname[64];
-	char   bootfile[128];
+	char sname[64];
+	char bootfile[128];
 	uint8 magic_cookie[4];
-	uint8 options[1];
-} dhcp_packet_t;
-typedef struct dhcp_option {
+};
+
+struct dhcp_option {
 	uint8 code;
 	uint8 len;
-	uint8 vals[5];
-} dhcp_option_t;
+	uint8 val[0];
+};
 
-static inline dhcp_option_t *dhcp_option_next(const dhcp_option_t *option)
+struct __attribute__((aligned(8))) dhcp_packet {
+	struct dhcp_head header;
+	struct dhcp_option options[0];
+};
+
+struct dhcp_data {
+	unsigned short len;
+	unsigned short maxlen;
+	unsigned short pad[2];
+	struct dhcp_packet dhpkt;
+};
+
+int dhcp_valid(const struct dhcp_data *dhdat);
+int dhcp_pxe(const struct dhcp_data *dhdat);
+
+static inline
+const struct dhcp_option *dhcp_option_cnext(const struct dhcp_option *option)
 {
-	dhcp_option_t *retp;
+	const struct dhcp_option *cnext = NULL;
 
-	retp = NULL;
-	if (option->code == 0)
-		retp = (dhcp_option_t *) (&option->code + 1);
-	else if (option->code != 255)
-		retp = (dhcp_option_t *)(option->vals + option->len);
-	return retp;
+	if (option->code == DHCP_PAD)
+		cnext = (const void *)option + 1;
+	else if (option->code == DHCP_END)
+		cnext = NULL;
+	else
+		cnext = (const void *)(option + 1) + option->len;
+	return cnext;
 }
 
-typedef struct dhcp_buff {
-        dhcp_packet_t *packet;
-        int len, maxlen;
-} dhcp_buff_t;
-
-static inline void dhcp_buff_init(dhcp_buff_t *buf)
+static inline
+struct dhcp_option *dhcp_option_next(struct dhcp_option *option)
 {
-	buf->len = 0;
-	buf->maxlen = PACKET_LEN;
-}
-const dhcp_option_t *dhcp_option_search(const dhcp_buff_t *dhcp, int opt);
-const dhcp_option_t *dhcp_vendopt_search(const dhcp_buff_t *dhcp, int opt);
-const dhcp_option_t *dhcp_pxe_request(const dhcp_buff_t *dhcp);
-int dhcp_get_uuid(const dhcp_buff_t *buff, uint8 uuid[16]);
+	struct dhcp_option *next = NULL;
 
-void dhcp_dump_macaddr(const dhcp_packet_t *packet, FILE *outf);
-void dhcp_dump_packet(const dhcp_buff_t *dhcp, FILE *outf);
-static inline void dhcp_dump_raw_packet(const dhcp_buff_t *dhcp,
-		const char *fname)
-{
-	FILE *outf;
-
-	outf = fopen(fname, "wb");
-	if (outf) {
-		errlog("Raw Packet dump length: %d\n", dhcp->len);
-		fwrite(dhcp->packet, 1, dhcp->len, outf);
-	}
-	fclose(outf);
+	if (option->code == DHCP_PAD)
+		next = (void *)option + 1;
+	else if (option->code == DHCP_END)
+		next = NULL;
+	else
+		next = (void *)(option + 1) + option->len;
+	return next;
 }
 
-static inline int dhcp_valid_packet(const dhcp_packet_t *dhcp)
-{
-	int retv;
-
-	retv = 0;
-	if (dhcp->magic_cookie[0] == 99 &&
-	    dhcp->magic_cookie[1] == 130 &&
-	    dhcp->magic_cookie[2] == 83 &&
-	    dhcp->magic_cookie[3] == 99) retv = 1;
-	return retv;
-}
+const struct dhcp_option *
+dhcp_option_search(const struct dhcp_data *dhdat, int opt);
+void dhcp_echo_packet(const struct dhcp_data *dhdat);
 
 #endif /* DHCP_DSCAO__ */
