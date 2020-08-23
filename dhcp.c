@@ -58,7 +58,7 @@ static int llog(const char *fmt, ...)
 	va_start(ap, fmt);
 	len = vprintf(fmt, ap);
 	va_end(ap);
-	return len;
+	return len+1;
 }
 
 static inline int dhcp_echo_ip(const unsigned int ip)
@@ -134,10 +134,22 @@ static void dhcp_echo_head(const struct dhcp_packet *dhpkt)
 			hdr->magic_cookie[3]);
 }
 
+static inline char *dhcp_opt2str(const struct dhcp_option *opt)
+{
+	char *buf;
+
+	buf = malloc(opt->len + 1);
+	memcpy(buf, opt->val, opt->len);
+	*(buf+opt->len) = 0;
+	return buf;
+}
+
 static int dhcp_echo_option(const struct dhcp_option *opt)
 {
 	int len, i;
 	char *buf;
+	unsigned short arch;
+	const struct dhcp_option *inn;
 
 	len = 0;
 	switch(opt->code) {
@@ -149,11 +161,82 @@ static int dhcp_echo_option(const struct dhcp_option *opt)
 				opt->val[1], opt->val[2], opt->val[3]);
 		break;
 	case 12:
-		buf = malloc(opt->len + 1);
-		memcpy(buf, opt->val, opt->len);
-		*(buf+opt->len) = 0;
+		buf = dhcp_opt2str(opt);
 		len = llog("Client Host Name: %s\n", buf);
 		free(buf);
+		break;
+	case 43:
+		inn = (const struct dhcp_option *)opt->val;
+		len = llog("Vendor Options: \n");
+		while (inn) {
+			llog("\t");
+			len += dhcp_echo_option(inn);
+			inn = dhcp_option_cnext(inn);
+		}
+		break;
+	case 51:
+		len = llog("DHCP Lease Time: %u\n", (opt->val[0] << 24) |
+				(opt->val[1] << 16) | (opt->val[2] << 8) |
+				opt->val[3]);
+		break;
+	case 53:
+		len = llog("Message Type: ");
+		switch(opt->val[0]) {
+		case 1:
+			len += llog("DHCP Discover");
+			break;
+		case 2:
+			len += llog("DHCP Offer");
+			break;
+		case 3:
+			len += llog("DHCP Request");
+			break;
+		case 4:
+			len += llog("DHCP Decline");
+			break;
+		case 5:
+			len += llog("DHCP Ack");
+			break;
+		case 6:
+			len += llog("DHCP No Ack");
+			break;
+		case 7:
+			len += llog("DHCP Release");
+			break;
+		case 8:
+			len += llog("DHCP Inform");
+			break;
+		default:
+			len += llog("Unknown");
+			break;
+		}
+		llog("\n");
+		break;
+	case 54:
+		len = llog("Server ID: %hhu.%hhu.%hhu.%hhu\n", opt->val[0],
+				opt->val[1], opt->val[2], opt->val[3]);
+		break;
+	case 57:
+		len = llog("Max DHCP Message Length: %u\n",
+				(int)((opt->val[0] << 8) | opt->val[1]));
+		break;
+	case 60:
+		buf = dhcp_opt2str(opt);
+		len = llog("Class ID: %s\n", buf);
+		free(buf);
+		break;
+	case 97:
+	case 61:
+		buf = dhcp_opt2str(opt);
+		len = llog("Client UUID: %s\n", buf+1);
+		free(buf);
+		break;
+	case 93:
+		arch = (opt->val[0] << 8) | opt->val[1];
+		len = llog("Client Arch: %u\n", arch);
+		break;
+	case 255:
+		len = llog("DHCP Message End: %u\n", opt->code);
 		break;
 	default:
 		len = llog("Option: %u, Length: %u, Vals:", opt->code,
@@ -186,42 +269,3 @@ void dhcp_echo_packet(const struct dhcp_data *dhdat)
 		opt = dhcp_option_cnext(opt);
 	}
 }
-/*
-
-	option = dhcp_option_search(dhcp_buff, DHCLASS);
-	if (!option || option->len < 9 || 
-		memcmp(option->vals, "PXEClient", 9) != 0) {
-		outlog(outf, "Not a PXE boot packet!\n");
-		dhcp_dump_macaddr(dhcp, outf);
-		return;
-	}
-	get_datetime(date, sizeof(date));
-	outlog(outf, "\n%s: ", date);
-	if (dhcp->op == 1)
-		outlog(outf, "Boot Request Packet");
-	else if (dhcp->op == 2)
-		outlog(outf, "Boot Reply Packet");
-	else
-		outlog(outf, "A Unknown Packet");
-	outlog(outf, " length: %d\n", len);
-
-	option = (dhcp_option_t *)dhcp->options;
-	pos = ((void *)option - (void *)dhcp);
-	while (option->code != DHEND && pos < len) {
-		dump_option(option, 1, outf);
-		option = dhcp_option_next(option);
-		pos = ((void *)option - (void *)dhcp);
-	}
-
-	option = dhcp_pxe_request(dhcp_buff);
-	if (option) {
-		if (option->vals[0] == 1)
-			outlog(outf, "A PXE discover packet!\n");
-		else if (option->vals[0] == 3)
-			outlog(outf, "A PXE request packet!\n");
-		option = dhcp_option_search(dhcp_buff, DHCLASS);
-		memcpy(string, (const char *)option->vals, option->len);
-		string[option->len] = 0;
-		outlog(outf, "PXE Mark: %s\n", string);
-	}
-}*/
