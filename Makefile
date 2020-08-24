@@ -13,7 +13,7 @@ all:	pxed retv pxem
 pxem:	pxe_monitor.o dhcp.o miscs.o
 	$(LINK.o) $^ -o $@
 
-pxed:	pxe_server.o pxe_util.o dhcp.o pxe_config.tab.o lex.yy.o
+pxed:	pxed.o dhcp.o miscs.o
 	$(LINK.o) $^ -o $@
 
 retv:	retrieve.o dhcp.o
