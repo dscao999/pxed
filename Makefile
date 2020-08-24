@@ -28,7 +28,7 @@ pxe_config.tab.c pxe_config.tab.h: pxe_config.y
 	bison -d pxe_config.y
 
 clean:
-	rm -f pxed retv *.o
+	rm -f pxed pxem retv *.o
 	rm -f pxe_config.tab.c lex.yy.c
 
 release:	CFLAGS += -DNDEBUG -O2

@@ -6,6 +6,7 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netdb.h>
+#include <arpa/inet.h>
 #include <errno.h>
 #include <poll.h>
 #include <signal.h>
@@ -15,6 +16,8 @@
 #include "dhcp.h"
 
 static volatile int global_exit = 0;
+
+#define PXE_DISC_SET	0x06
 
 void sig_handler(int sig)
 {
@@ -78,16 +81,69 @@ exit_10:
 }
 
 static const unsigned char svrip[] = {192, 168, 1, 105};
+static const char PXE_PROMPT1[] = "PXE Investigation 1";
+static const char PXE_PROMPT[] = "PXE Research";
 
-static int pxe_offer(int sockd, const struct sockaddr_in *peer,
-		struct dhcp_data *dhdat)
+static int makeup_vendor_pxe(struct dhcp_option *opt, int lenrem)
+{
+	int vlen;
+	struct dhcp_option *vopt;
+
+	opt->code = DHCP_VENDOR;
+	vopt = (struct dhcp_option *)opt->val;
+
+	vlen = 0;
+	vopt->code = PXE_DISCTL;
+	vopt->len = 1;
+	vopt->val[0] = PXE_DISC_SET;
+	vlen += sizeof(struct dhcp_option) + vopt->len;
+
+	vopt = dhcp_option_next(vopt);
+	vopt->code = PXE_BOOTSVR;
+	vopt->val[0] = 0x30;
+	vopt->val[1] = 1;
+	vopt->val[2] = 1;
+
+	vopt->val[3] = 192;
+	vopt->val[4] = 168;
+	vopt->val[5] = 1;
+	vopt->val[6] = 105;
+
+	vopt->len = 7;
+	vlen += sizeof(struct dhcp_option) + vopt->len;
+
+	vopt = dhcp_option_next(vopt);
+	vopt->code = PXE_BOOTMENU;
+	vopt->val[0] = 0x30;
+	vopt->val[1] = 1;
+	vopt->val[2] = strlen(PXE_PROMPT1);
+	strcpy((char *)(vopt->val+3), PXE_PROMPT1);
+	vopt->len = vopt->val[2] + 4;
+	vlen += sizeof(struct dhcp_option) + vopt->len;
+
+	vopt = dhcp_option_next(vopt);
+	vopt->code = PXE_BOOTPROMPT;
+	vopt->val[0] = 50;
+	strcpy((char *)(vopt->val+1), PXE_PROMPT);
+	vopt->len = strlen(PXE_PROMPT) + 2;
+	vlen += sizeof(struct dhcp_option) + vopt->len;
+
+	vopt = dhcp_option_next(vopt);
+	vopt->code = PXE_END;
+
+	opt->len = vlen + 1;
+	assert(opt->len + sizeof(struct dhcp_option) < lenrem);
+	return sizeof(struct dhcp_option) + opt->len;
+}
+
+static int pxe_offer(int sockd, struct dhcp_data *dhdat,
+		struct sockaddr_in *peer)
 {
 	struct dhcp_packet *dhcp;
 	struct dhcp_option *opt;
 	const struct dhcp_option *c_opt;
-	int len = 0, maxlen = 1000;
+	int optlen = 0, maxlen = 1024, lenrem, len;
 	unsigned char uuid[17];
-	int uid_code = DHCP_CUUID;
 	
 	dhcp = &dhdat->dhpkt;
 	c_opt = dhcp_option_search(dhdat, DHCP_CUUID);
@@ -99,7 +155,6 @@ static int pxe_offer(int sockd, const struct sockaddr_in *peer,
 	else {
 		assert(c_opt->len == 17);
 		memcpy(uuid, c_opt->val, c_opt->len);
-		uid_code = c_opt->code;
 	}
 	c_opt = dhcp_option_search(dhdat, DHCP_MAXLEN);
 	if (unlikely(!c_opt))
@@ -111,11 +166,12 @@ static int pxe_offer(int sockd, const struct sockaddr_in *peer,
 	dhcp->header.secs = 0;
 	memset(&dhcp->header.ciaddr, 0, 16);
 
+	optlen = 0;
 	opt = dhcp->options;
 	opt->code = DHCP_MSGTYPE;
 	opt->len = 1;
 	opt->val[0] = DHCP_OFFER;
-	len += sizeof(struct dhcp_option) + opt->len;
+	optlen += sizeof(struct dhcp_option) + opt->len;
 
 	opt = dhcp_option_next(opt);
 	opt->code = DHCP_SVRID;
@@ -124,33 +180,34 @@ static int pxe_offer(int sockd, const struct sockaddr_in *peer,
 	opt->val[1] = svrip[1];
 	opt->val[2] = svrip[2];
 	opt->val[3] = svrip[3];
-	len += sizeof(struct dhcp_option) + opt->len;
+	optlen += sizeof(struct dhcp_option) + opt->len;
 
 	opt = dhcp_option_next(opt);
-	opt->code = uid_code;
+	opt->code = DHCP_CMUID;
 	opt->len = 17;
 	memcpy(opt->val, uuid, opt->len);
-	len += sizeof(struct dhcp_option) + opt->len;
+	optlen += sizeof(struct dhcp_option) + opt->len;
 
 	opt = dhcp_option_next(opt);
 	opt->code = DHCP_CLASS;
 	opt->len = 9;
 	memcpy(opt->val, "PXEClient", 9);
-	len += sizeof(struct dhcp_option) + opt->len;
+	optlen += sizeof(struct dhcp_option) + opt->len;
 
+	lenrem = maxlen - sizeof(struct dhcp_head) - optlen;
 	opt = dhcp_option_next(opt);
-	opt->code = DHCP_MAXLEN;
-	opt->len = 2;
-	opt->val[0] = (maxlen >> 8) & 0x0ff;
-	opt->val[1] = maxlen & 0x0ff;
-	len += sizeof(struct dhcp_option) + opt->len;
+	makeup_vendor_pxe(opt, lenrem);
+	optlen += sizeof(struct dhcp_option) + opt->len;
 
 	opt = dhcp_option_next(opt);
 	opt->code = DHCP_END;
-	len += 1;
+	optlen += 1;
 
-	dhdat->len = sizeof(struct dhcp_head) + len;
-	len = sendto(sockd, dhcp, dhdat->len, 0, (const struct sockaddr *)peer,
+	if (peer->sin_addr.s_addr == 0)
+		inet_pton(AF_INET, "255.255.255.255", &peer->sin_addr);
+	dhdat->len = sizeof(struct dhcp_head) + optlen;
+	len = sendto(sockd, dhcp, dhdat->len, 0,
+			(const struct sockaddr *)peer,
 			sizeof(struct sockaddr_in));
 	if (unlikely(len != dhdat->len))
 		logmsg(LERR, "PXE Offer, sendto failed: %s", strerror(errno));
@@ -164,6 +221,7 @@ static int packet_process(int sockd, struct dhcp_data *dhdat, FILE *fout,
 	struct sockaddr_in srcaddr;
 	socklen_t socklen;
 	char *buf = (char *)&dhdat->dhpkt;
+	const struct dhcp_option *opt;
 
 	dhdat->len = 0;
 	socklen = sizeof(srcaddr);
@@ -182,15 +240,23 @@ static int packet_process(int sockd, struct dhcp_data *dhdat, FILE *fout,
 	if (!dhcp_pxe(dhdat))
 		return len;
 
-	printf("Preparing a PXE offer...\n");
-	len = pxe_offer(sockd, &srcaddr, dhdat);
+	opt = dhcp_option_search(dhdat, DHCP_MSGTYPE);
+	if (!opt)
+		logmsg(LERR, "No DHCP Message type specified.");
+	else if (opt->val[0] == DHCP_DISCOVER) {
+		printf("Preparing a PXE offer...\n");
+		len = pxe_offer(sockd, dhdat, &srcaddr);
+		if (verbose)
+			dhcp_echo_packet(dhdat);
+	} else
+		logmsg(LINFO, "Received a message type: %hhu", opt->val[0]);
 	return len;
 }
 
 int main(int argc, char *argv[])
 {
 	int retv, sockd, sysret;
-	struct pollfd fds[3];
+	struct pollfd fds[2];
 	struct sigaction sigact;
 	struct dhcp_data *dhdat;
 
@@ -211,21 +277,18 @@ int main(int argc, char *argv[])
 	retv = poll_init(fds, 67);
 	if (retv != 0)
 		goto exit_10;
-	retv = poll_init(fds+1, 68);
+	retv = poll_init(fds+1, 4011);
 	if (retv != 0)
 		goto exit_20;
-	retv = poll_init(fds+2, 4011);
-	if (retv != 0)
-		goto exit_30;
 
 
 	global_exit = 0;
 	do {
-		sysret = poll(fds, 3, 1000);
+		sysret = poll(fds, sizeof(fds) / sizeof(struct pollfd), 1000);
 		if (sysret == -1 && errno != EINTR) {
 			logmsg(LERR, "poll failed: %s\n", strerror(errno));
 			retv = 600;
-			goto exit_40;
+			goto exit_30;
 		} else if ((sysret == -1 && errno == EINTR) || sysret == 0)
 			continue;
 		
@@ -235,21 +298,14 @@ int main(int argc, char *argv[])
 		}
 		if (fds[1].revents) {
 			sockd = fds[1].fd;
-			logmsg(LINFO, "Receive a DHCP message at port 68.");
-		}
-		if (fds[2].revents) {
-			sockd = fds[2].fd;
 			logmsg(LINFO, "Receive a DHCP message at port 4011.");
 		}
 		packet_process(sockd, dhdat, NULL, 1);
 
 		fds[0].revents = 0;
 		fds[1].revents = 0;
-		fds[2].revents = 0;
 	} while (global_exit == 0);
 
-exit_40:
-	close(fds[2].fd);
 exit_30:
 	close(fds[1].fd);
 exit_20:

@@ -59,3 +59,5 @@ dkms.conf
 pxed
 pxem
 retv
+core
+cscope.*

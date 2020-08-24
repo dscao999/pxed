@@ -79,7 +79,7 @@ static int dhcp_echo_chaddr(const uint8 chaddr[16])
 	return len;
 }
 
-static void dhcp_echo_head(const struct dhcp_packet *dhpkt)
+static int dhcp_echo_head(const struct dhcp_packet *dhpkt)
 {
 	const struct dhcp_head *hdr = &dhpkt->header;
 
@@ -108,6 +108,7 @@ static void dhcp_echo_head(const struct dhcp_packet *dhpkt)
 	llog("Cookie: %hhu.%hhu.%hhu.%hhu\n", hdr->magic_cookie[0],
 			hdr->magic_cookie[1], hdr->magic_cookie[2],
 			hdr->magic_cookie[3]);
+	return sizeof(struct dhcp_head);
 }
 
 static inline char *dhcp_opt2str(const struct dhcp_option *opt)
@@ -122,106 +123,110 @@ static inline char *dhcp_opt2str(const struct dhcp_option *opt)
 
 static int dhcp_echo_option(const struct dhcp_option *opt)
 {
-	int len, i;
+	int len, venlen, i;
 	char *buf;
 	unsigned short arch;
 	const struct dhcp_option *inn;
 
-	len = 0;
+	len = opt->len + sizeof(struct dhcp_option);
 	switch(opt->code) {
 	case DHCP_PAD:
+		len = 1;
 		break;
 	case DHCP_NETMASK:
 		assert(opt->len == 4);
-		len = llog("Subnet Mask: %hhu.%hhu.%hhu.%hhu\n", opt->val[0],
+		llog("Subnet Mask: %hhu.%hhu.%hhu.%hhu\n", opt->val[0],
 				opt->val[1], opt->val[2], opt->val[3]);
 		break;
 	case DHCP_CLNAME:
 		buf = dhcp_opt2str(opt);
-		len = llog("Client Host Name: %s\n", buf);
+		llog("Client Host Name: %s\n", buf);
 		free(buf);
 		break;
 	case DHCP_VENDOR:
 		inn = (const struct dhcp_option *)opt->val;
-		len = llog("Vendor Options: \n");
+		llog("Vendor Options: \n");
+		venlen = 0;
 		while (inn) {
 			llog("\t");
-			len += dhcp_echo_option(inn);
+			venlen += dhcp_echo_option(inn);
 			inn = dhcp_option_cnext(inn);
 		}
+		assert(opt->len == venlen);
 		break;
 	case DHCP_LTIME:
-		len = llog("DHCP Lease Time: %u\n", (opt->val[0] << 24) |
+		llog("DHCP Lease Time: %u\n", (opt->val[0] << 24) |
 				(opt->val[1] << 16) | (opt->val[2] << 8) |
 				opt->val[3]);
 		break;
 	case DHCP_MSGTYPE:
-		len = llog("Message Type: ");
+		llog("Message Type: ");
 		switch(opt->val[0]) {
 		case DHCP_DISCOVER:
-			len += llog("DHCP Discover");
+			llog("DHCP Discover");
 			break;
 		case DHCP_OFFER:
-			len += llog("DHCP Offer");
+			llog("DHCP Offer");
 			break;
 		case DHCP_REQUEST:
-			len += llog("DHCP Request");
+			llog("DHCP Request");
 			break;
 		case DHCP_DECLINE:
-			len += llog("DHCP Decline");
+			llog("DHCP Decline");
 			break;
 		case DHCP_ACK:
-			len += llog("DHCP Ack");
+			llog("DHCP Ack");
 			break;
 		case DHCP_NACK:
-			len += llog("DHCP No Ack");
+			llog("DHCP No Ack");
 			break;
 		case DHCP_RELEASE:
-			len += llog("DHCP Release");
+			llog("DHCP Release");
 			break;
 		case DHCP_INFORM:
-			len += llog("DHCP Inform");
+			llog("DHCP Inform");
 			break;
 		default:
-			len += llog("Unknown");
+			llog("Unknown");
 			break;
 		}
 		llog("\n");
 		break;
 	case DHCP_SVRID:
-		len = llog("Server ID: %hhu.%hhu.%hhu.%hhu\n", opt->val[0],
+		llog("Server ID: %hhu.%hhu.%hhu.%hhu\n", opt->val[0],
 				opt->val[1], opt->val[2], opt->val[3]);
 		break;
 	case DHCP_MAXLEN:
-		len = llog("Max DHCP Message Length: %u\n",
+		llog("Max DHCP Message Length: %u\n",
 				(int)((opt->val[0] << 8) | opt->val[1]));
 		break;
 	case DHCP_CLASS:
 		buf = dhcp_opt2str(opt);
-		len = llog("Class ID: %s\n", buf);
+		llog("Class ID: %s\n", buf);
 		free(buf);
 		break;
 	case DHCP_CMUID:
 	case DHCP_CUUID:
-		len = llog("Client UUID: code->%hhu type->%hhu",
+		llog("Client UUID: code->%hhu type->%hhu",
 				opt->code, opt->val[0]);
 		for (i = 1; i < 17; i++)
-			len += llog(" %02hhX", opt->val[i]);
-		len += llog("\n");
+			llog(" %02hhX", opt->val[i]);
+		llog("\n");
 		break;
 	case DHCP_CLARCH:
 		arch = (opt->val[0] << 8) | opt->val[1];
-		len = llog("Client Arch: %u\n", arch);
+		llog("Client Arch: %u\n", arch);
 		break;
 	case DHCP_END:
-		len = llog("DHCP Message End: %u\n", opt->code);
+		len = 1;
+		llog("DHCP Message End: %u\n", opt->code);
 		break;
 	default:
-		len = llog("Option: %u, Length: %u, Vals:", opt->code,
+		llog("Option: %u, Length: %u, Vals:", opt->code,
 				opt->len);
 		for (i = 0; i < opt->len; i++)
-			len += llog(" %02hhX", opt->val[i]);
-		len += llog("\n");
+			llog(" %02hhX", opt->val[i]);
+		llog("\n");
 		break;
 	}
 	return len;
@@ -231,6 +236,8 @@ void dhcp_echo_packet(const struct dhcp_data *dhdat)
 {
 	const struct dhcp_packet *dhcp;
 	const struct dhcp_option *opt;
+	struct timespec ctm;
+	int len;
 
 	dhcp = &dhdat->dhpkt;
 	if (!dhcp_valid(dhdat)) {
@@ -238,12 +245,14 @@ void dhcp_echo_packet(const struct dhcp_data *dhdat)
 		return;
 	}
 
-	dhcp_echo_head(dhcp);
+	clock_gettime(CLOCK_MONOTONIC_COARSE, &ctm);
+	llog("Time Stamp:%09lu.%03lu\n", ctm.tv_sec, ctm.tv_nsec / 1000000);
+	len = dhcp_echo_head(dhcp);
 	if (dhdat->len == sizeof(struct dhcp_packet))
 		return;
 	opt = dhcp->options;
 	while (opt) {
-		dhcp_echo_option(opt);
+		len += dhcp_echo_option(opt);
 		opt = dhcp_option_cnext(opt);
 	}
 }

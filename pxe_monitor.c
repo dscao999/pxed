@@ -91,7 +91,7 @@ static int packet_process(int sockd, struct dhcp_data *dhdat, FILE *fout)
 int main(int argc, char *argv[])
 {
 	int retv, sockd, sysret;
-	struct pollfd fds[3];
+	struct pollfd fds[2];
 	struct sigaction sigact;
 	struct dhcp_data *dhdat;
 
@@ -112,45 +112,35 @@ int main(int argc, char *argv[])
 	retv = poll_init(fds, 67);
 	if (retv != 0)
 		goto exit_10;
-	retv = poll_init(fds+1, 68);
+	retv = poll_init(fds+1, 4011);
 	if (retv != 0)
 		goto exit_20;
-	retv = poll_init(fds+2, 4011);
-	if (retv != 0)
-		goto exit_30;
 
 
 	global_exit = 0;
 	do {
-		sysret = poll(fds, 3, 1000);
+		sysret = poll(fds, 2, 1000);
 		if (sysret == -1 && errno != EINTR) {
 			logmsg(LERR, "poll failed: %s\n", strerror(errno));
 			retv = 600;
-			goto exit_40;
+			goto exit_30;
 		} else if ((sysret == -1 && errno == EINTR) || sysret == 0)
 			continue;
 		
 		if (fds[0].revents) {
 			sockd = fds[0].fd;
+			fds[0].revents = 0;
 			logmsg(LINFO, "Receive a DHCP message at port 67.");
 		}
 		if (fds[1].revents) {
 			sockd = fds[1].fd;
+			fds[1].revents = 0;
 			logmsg(LINFO, "Receive a DHCP message at port 68.");
-		}
-		if (fds[2].revents) {
-			sockd = fds[2].fd;
-			logmsg(LINFO, "Receive a DHCP message at port 4011.");
 		}
 		packet_process(sockd, dhdat, NULL);
 
-		fds[0].revents = 0;
-		fds[1].revents = 0;
-		fds[2].revents = 0;
 	} while (global_exit == 0);
 
-exit_40:
-	close(fds[2].fd);
 exit_30:
 	close(fds[1].fd);
 exit_20:

@@ -42,7 +42,7 @@ struct dhcp_head {
 	uint8 magic_cookie[4];
 };
 
-struct dhcp_option {
+struct __attribute__((aligned(1))) dhcp_option {
 	uint8 code;
 	uint8 len;
 	uint8 val[0];
