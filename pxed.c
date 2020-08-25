@@ -12,6 +12,8 @@
 #include <signal.h>
 #include <sched.h>
 #include <assert.h>
+#include <ifaddrs.h>
+#include <net/if.h>
 #include "miscs.h"
 #include "dhcp.h"
 
@@ -27,11 +29,42 @@ void sig_handler(int sig)
 
 struct g_param {
 	const char *conf;
-	const char *iface;
+	char iface[16];
+	unsigned int svrip;
 	int verbose;
 };
 
-static int poll_init(struct pollfd *pfd, int port)
+static int svrip_init(struct g_param *gp)
+{
+	struct ifaddrs *ifaddr, *ifa;
+	int family, retv;
+	struct sockaddr_in *inaddr;
+
+	retv = 1;
+	if (getifaddrs(&ifaddr) == -1) {
+		perror("getifaddrs failed");
+		return retv;
+	}
+	for (ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next) {
+		family = ifa->ifa_addr->sa_family;
+		if (family != AF_INET || (ifa->ifa_flags & IFF_POINTOPOINT) ||
+				!(ifa->ifa_flags & IFF_BROADCAST))
+			continue;
+		inaddr = (struct sockaddr_in *)ifa->ifa_addr;
+		if (gp->iface[0] == 0)
+			strcpy(gp->iface, ifa->ifa_name);
+		else if (strcmp(gp->iface, ifa->ifa_name) != 0)
+			continue;
+		gp->svrip = inaddr->sin_addr.s_addr;
+		break;
+	}
+	freeifaddrs(ifaddr);
+	if (likely(ifa != NULL))
+		retv = 0;
+	return retv;
+}
+
+static int poll_init(const struct g_param *gp, struct pollfd *pfd, int port)
 {
 	int sockd, retv, broadcast, sysret;
 	char pstr[16];
@@ -67,6 +100,12 @@ static int poll_init(struct pollfd *pfd, int port)
 			goto exit_30;
 		}
 	}
+	if (setsockopt(sockd, SOL_SOCKET, SO_BINDTODEVICE, gp->iface,
+				sizeof(char *)) == -1) {
+		logmsg(LERR, "Cannot bind socket to %s", gp->iface);
+		retv = errno;
+		goto exit_30;
+	}
 	pfd->fd = sockd;
 	pfd->revents = 0;
 	pfd->events = POLLIN;
@@ -86,11 +125,11 @@ exit_10:
 	return retv;
 }
 
-static const unsigned char svrip[] = {192, 168, 1, 105};
 static const char PXE_PROMPT1[] = "PXE Investigation 1";
 static const char PXE_PROMPT[] = "PXE Research";
 
-static int makeup_vendor_pxe(struct dhcp_option *opt, int lenrem)
+static int makeup_vendor_pxe(struct dhcp_option *opt, int lenrem,
+		const struct g_param *gp)
 {
 	int vlen;
 	struct dhcp_option *vopt;
@@ -110,10 +149,10 @@ static int makeup_vendor_pxe(struct dhcp_option *opt, int lenrem)
 	vopt->val[1] = 1;
 	vopt->val[2] = 1;
 
-	vopt->val[3] = 192;
-	vopt->val[4] = 168;
-	vopt->val[5] = 1;
-	vopt->val[6] = 105;
+	vopt->val[3] = gp->svrip & 0x0ff;
+	vopt->val[4] = (gp->svrip >> 8) & 0x0ff;
+	vopt->val[5] = (gp->svrip >> 16) & 0x0ff;
+	vopt->val[6] = gp->svrip >> 24;
 
 	vopt->len = 7;
 	vlen += sizeof(struct dhcp_option) + vopt->len;
@@ -142,15 +181,16 @@ static int makeup_vendor_pxe(struct dhcp_option *opt, int lenrem)
 	return sizeof(struct dhcp_option) + opt->len;
 }
 
-static int pxe_ack(int sockd, struct dhcp_data *dhdat,
-		struct sockaddr_in *peer)
+static int make_pxe_ack(int sockd, struct dhcp_data *dhdat,
+		struct sockaddr_in *peer, const struct dhcp_opton *vopt,
+		const struct g_param *gp)
 {
 	logmsg(LINFO, "I will do a pxe ack.");
 	dhdat->dhpkt.header.op = DHCP_REP;
 	return 0;
 }
-static int pxe_offer(int sockd, struct dhcp_data *dhdat,
-		struct sockaddr_in *peer)
+static int make_pxe_offer(int sockd, struct dhcp_data *dhdat,
+		struct sockaddr_in *peer, const struct g_param *gp)
 {
 	struct dhcp_packet *dhcp;
 	struct dhcp_option *opt;
@@ -189,10 +229,10 @@ static int pxe_offer(int sockd, struct dhcp_data *dhdat,
 	opt = dhcp_option_next(opt);
 	opt->code = DHCP_SVRID;
 	opt->len = 4;
-	opt->val[0] = svrip[0];
-	opt->val[1] = svrip[1];
-	opt->val[2] = svrip[2];
-	opt->val[3] = svrip[3];
+	opt->val[0] = gp->svrip & 0x0ff;
+	opt->val[1] = (gp->svrip >> 8) & 0x0ff;
+	opt->val[2] = (gp->svrip >> 16) & 0x0ff;
+	opt->val[3] = gp->svrip >> 24;
 	optlen += sizeof(struct dhcp_option) + opt->len;
 
 	opt = dhcp_option_next(opt);
@@ -209,7 +249,7 @@ static int pxe_offer(int sockd, struct dhcp_data *dhdat,
 
 	lenrem = maxlen - sizeof(struct dhcp_head) - optlen;
 	opt = dhcp_option_next(opt);
-	makeup_vendor_pxe(opt, lenrem);
+	makeup_vendor_pxe(opt, lenrem, gp);
 	optlen += sizeof(struct dhcp_option) + opt->len;
 
 	opt = dhcp_option_next(opt);
@@ -227,13 +267,30 @@ static int pxe_offer(int sockd, struct dhcp_data *dhdat,
 	return len;
 }
 
-static int packet_process(int sockd, struct dhcp_data *dhdat, int verbose)
+static const struct dhcp_option *get_boot_item(const struct dhcp_option *opt)
+{
+	const struct dhcp_option *vopt;
+
+	if (!opt)
+		return NULL;
+
+	vopt = (const struct dhcp_option *)opt->val;
+	while (vopt) {
+		if (vopt->code == PXE_BOOTITEM)
+			break;
+		vopt = dhcp_option_cnext(vopt);
+	}
+	return vopt;
+}
+
+static int packet_process(int sockd, struct dhcp_data *dhdat,
+		const struct g_param *gp)
 {
 	int len, buflen = dhdat->maxlen;
 	struct sockaddr_in srcaddr;
 	socklen_t socklen;
 	char *buf = (char *)&dhdat->dhpkt;
-	const struct dhcp_option *opt;
+	const struct dhcp_option *opt, *vopt;
 
 	dhdat->len = 0;
 	socklen = sizeof(srcaddr);
@@ -247,21 +304,22 @@ static int packet_process(int sockd, struct dhcp_data *dhdat, int verbose)
 	dhdat->len = len;
 	if (!dhcp_pxe(dhdat))
 		return len;
-	if (verbose)
+	if (gp->verbose)
 		dhcp_echo_packet(dhdat);
 
 	opt = dhcp_option_search(dhdat, DHCP_MSGTYPE);
 	if (!opt)
 		logmsg(LERR, "No DHCP Message type specified.");
 	else if (opt->val[0] == DHCP_DISCOVER) {
-		len = pxe_offer(sockd, dhdat, &srcaddr);
-		if (verbose)
+		len = make_pxe_offer(sockd, dhdat, &srcaddr, gp);
+		if (gp->verbose)
 			dhcp_echo_packet(dhdat);
 	} else if (opt->val[0] == DHCP_REQUEST) {
-		opt = dhcp_option_search(dhdat, DHCP_SVRID);
-		if (opt && memcmp(opt->val+1, svrip, opt->len) == 0) {
-			len = pxe_ack(sockd, dhdat, &srcaddr);
-			if (verbose)
+		opt = dhcp_option_search(dhdat, DHCP_VENDOR);
+		vopt = get_boot_item(opt);
+		if (vopt) {
+			len = make_pxe_ack(sockd, dhdat, &srcaddr, vopt, gp);
+			if (gp->verbose)
 				dhcp_echo_packet(dhdat);
 		}
 	} else
@@ -277,7 +335,8 @@ static void gparam_init(int argc, char *argv[], struct g_param *gp)
 	extern int opterr, optopt;
 
 	gp->conf = "/etc/default/pxed.conf";
-	gp->iface = NULL;
+	gp->iface[0] = 0;
+	gp->svrip = 0;
 	gp->verbose = 0;
 	do {
 		opt = getopt(argc, argv, ":c:i:v");
@@ -295,7 +354,11 @@ static void gparam_init(int argc, char *argv[], struct g_param *gp)
 			gp->conf = optarg;
 			break;
 		case 'i':
-			gp->iface = optarg;
+			if (strlen(optarg) < sizeof(gp->iface))
+				strcpy(gp->iface, optarg);
+			else
+				logmsg(LERR, "Interace name too long: %s",
+						optarg);
 			break;
 		case 'v':
 			gp->verbose = 1;
@@ -315,6 +378,8 @@ int main(int argc, char *argv[])
 	static struct g_param gp;
 
 	gparam_init(argc, argv, &gp);
+	if (svrip_init(&gp))
+		return 1;
 
 	memset(fds, 0, sizeof(fds));
 	retv = 0;
@@ -330,13 +395,12 @@ int main(int argc, char *argv[])
 	check_pointer(dhdat);
 	dhdat->maxlen = 2048 - offsetof(struct dhcp_data, dhpkt);
 
-	retv = poll_init(fds, 67);
+	retv = poll_init(&gp, fds, 67);
 	if (retv != 0)
 		goto exit_10;
-	retv = poll_init(fds+1, 4011);
+	retv = poll_init(&gp, fds+1, 4011);
 	if (retv != 0)
 		goto exit_20;
-
 
 	global_exit = 0;
 	do {
@@ -356,7 +420,7 @@ int main(int argc, char *argv[])
 			sockd = fds[1].fd;
 			logmsg(LINFO, "Receive a DHCP message at port 4011.");
 		}
-		packet_process(sockd, dhdat, gp.verbose);
+		packet_process(sockd, dhdat, &gp);
 
 		fds[0].revents = 0;
 		fds[1].revents = 0;
