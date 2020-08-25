@@ -33,18 +33,15 @@ dhcp_option_search(const struct dhcp_data *dhdat, int opt)
 {
 	const struct dhcp_option *option;;
 	const struct dhcp_packet *dhpkt = &dhdat->dhpkt;
-	int found, len = dhdat->len;
+	int len = dhdat->len;
 
-	found = 0;
 	option = dhdat->dhpkt.options;
 	do {
-		if (option->code == opt) {
-			found = 1;
+		if (option->code == opt)
 			break;
-		}
 		option = dhcp_option_cnext(option);
-	} while (option != NULL && ((void *)option - (void *)dhpkt < len));
-	if (!found)
+	} while (option != NULL && ((void *)option - (void *)dhpkt) < len);
+	if (option && ((void *)option - (void *)dhpkt) >= len)
 		option = NULL;
 
 	return option;
@@ -61,22 +58,21 @@ static int llog(const char *fmt, ...)
 	return len+1;
 }
 
-static inline int dhcp_echo_ip(const unsigned int ip)
+static inline void dhcp_echo_ip(const unsigned int ip)
 {
-	return llog("%d.%d.%d.%d", ip & 0x0ff, (ip >> 8) & 0x0ff,
+	llog("%d.%d.%d.%d", ip & 0x0ff, (ip >> 8) & 0x0ff,
 			(ip >> 16) & 0x0ff, (ip >> 24) & 0x0ff);
 }
 
-static int dhcp_echo_chaddr(const uint8 chaddr[16])
+static inline void dhcp_echo_chaddr(const uint8 chaddr[16])
 {
-	int len, i;
+	int i;
 	const uint8 *ch;
 
-	len = llog("DHCP chaddr:");
+	llog("DHCP chaddr:");
 	for (i = 0, ch = chaddr; i < 16; i++, ch++)
-		len += llog(" %02hhX", *ch);
-	len += llog("\n");
-	return len;
+		llog(" %02hhX", *ch);
+	llog("\n");
 }
 
 static int dhcp_echo_head(const struct dhcp_packet *dhpkt)
@@ -232,7 +228,7 @@ static int dhcp_echo_option(const struct dhcp_option *opt)
 	return len;
 }
 
-void dhcp_echo_packet(const struct dhcp_data *dhdat)
+int dhcp_echo_packet(const struct dhcp_data *dhdat)
 {
 	const struct dhcp_packet *dhcp;
 	const struct dhcp_option *opt;
@@ -240,19 +236,21 @@ void dhcp_echo_packet(const struct dhcp_data *dhdat)
 	int len;
 
 	dhcp = &dhdat->dhpkt;
+	clock_gettime(CLOCK_MONOTONIC_COARSE, &ctm);
+	llog("Time Stamp:%09lu.%03lu", ctm.tv_sec, ctm.tv_nsec / 1000000);
+	llog("====================================================\n");
 	if (!dhcp_valid(dhdat)) {
 		printf("Not a valid DHCP packet!\n");
-		return;
+		return dhdat->len;
 	}
 
-	clock_gettime(CLOCK_MONOTONIC_COARSE, &ctm);
-	llog("Time Stamp:%09lu.%03lu\n", ctm.tv_sec, ctm.tv_nsec / 1000000);
 	len = dhcp_echo_head(dhcp);
 	if (dhdat->len == sizeof(struct dhcp_packet))
-		return;
+		return dhdat->len;
 	opt = dhcp->options;
 	while (opt) {
 		len += dhcp_echo_option(opt);
 		opt = dhcp_option_cnext(opt);
 	}
+	return len;
 }

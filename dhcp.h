@@ -93,6 +93,6 @@ struct dhcp_option *dhcp_option_next(struct dhcp_option *option)
 
 const struct dhcp_option *
 dhcp_option_search(const struct dhcp_data *dhdat, int opt);
-void dhcp_echo_packet(const struct dhcp_data *dhdat);
+int dhcp_echo_packet(const struct dhcp_data *dhdat);
 
 #endif /* DHCP_DSCAO__ */

@@ -25,6 +25,12 @@ void sig_handler(int sig)
 		global_exit = 1;
 }
 
+struct g_param {
+	const char *conf;
+	const char *iface;
+	int verbose;
+};
+
 static int poll_init(struct pollfd *pfd, int port)
 {
 	int sockd, retv, broadcast, sysret;
@@ -136,6 +142,12 @@ static int makeup_vendor_pxe(struct dhcp_option *opt, int lenrem)
 	return sizeof(struct dhcp_option) + opt->len;
 }
 
+static int pxe_ack(int sockd, struct dhcp_data *dhdat,
+		struct sockaddr_in *peer)
+{
+	dhdat->dhpkt.header.op = DHCP_REP;
+	return 0;
+}
 static int pxe_offer(int sockd, struct dhcp_data *dhdat,
 		struct sockaddr_in *peer)
 {
@@ -214,8 +226,7 @@ static int pxe_offer(int sockd, struct dhcp_data *dhdat,
 	return len;
 }
 
-static int packet_process(int sockd, struct dhcp_data *dhdat, FILE *fout,
-		int verbose)
+static int packet_process(int sockd, struct dhcp_data *dhdat, int verbose)
 {
 	int len, buflen = dhdat->maxlen;
 	struct sockaddr_in srcaddr;
@@ -232,8 +243,6 @@ static int packet_process(int sockd, struct dhcp_data *dhdat, FILE *fout,
 		logmsg(LERR, "recvfrom failed: %s\n", strerror(errno));
 		return len;
 	}
-	if (fout)
-		fwrite(buf, 1, len, fout);
 	dhdat->len = len;
 	if (verbose)
 		dhcp_echo_packet(dhdat);
@@ -244,13 +253,56 @@ static int packet_process(int sockd, struct dhcp_data *dhdat, FILE *fout,
 	if (!opt)
 		logmsg(LERR, "No DHCP Message type specified.");
 	else if (opt->val[0] == DHCP_DISCOVER) {
-		printf("Preparing a PXE offer...\n");
 		len = pxe_offer(sockd, dhdat, &srcaddr);
 		if (verbose)
 			dhcp_echo_packet(dhdat);
+	} else if (opt->val[0] == DHCP_REQUEST) {
+		opt = dhcp_option_search(dhdat, DHCP_SVRID);
+		if (opt && memcmp(opt->val+1, svrip, opt->len) == 0) {
+			len = pxe_ack(sockd, dhdat, &srcaddr);
+			if (verbose)
+				dhcp_echo_packet(dhdat);
+		}
 	} else
-		logmsg(LINFO, "Received a message type: %hhu", opt->val[0]);
+		logmsg(LINFO, "Received a message type: %hhu ignored",
+				opt->val[0]);
 	return len;
+}
+
+static void gparam_init(int argc, char *argv[], struct g_param *gp)
+{
+	int fin = 0, opt;
+	extern char *optarg;
+	extern int opterr, optopt;
+
+	gp->conf = "/etc/default/pxed.conf";
+	gp->iface = NULL;
+	gp->verbose = 0;
+	do {
+		opt = getopt(argc, argv, ":c:i:v");
+		switch(opt) {
+		case -1:
+			fin = 1;
+			break;
+		case '?':
+			logmsg(LERR, "Unknown option: %c", (char)optopt);
+			break;
+		case ':':
+			logmsg(LERR, "Missing argument for %c", (char)optopt);
+			break;
+		case 'c':
+			gp->conf = optarg;
+			break;
+		case 'i':
+			gp->iface = optarg;
+			break;
+		case 'v':
+			gp->verbose = 1;
+			break;
+		default:
+			assert(0);
+		}
+	} while (fin == 0);
 }
 
 int main(int argc, char *argv[])
@@ -259,6 +311,9 @@ int main(int argc, char *argv[])
 	struct pollfd fds[2];
 	struct sigaction sigact;
 	struct dhcp_data *dhdat;
+	static struct g_param gp;
+
+	gparam_init(argc, argv, &gp);
 
 	memset(fds, 0, sizeof(fds));
 	retv = 0;
@@ -300,7 +355,7 @@ int main(int argc, char *argv[])
 			sockd = fds[1].fd;
 			logmsg(LINFO, "Receive a DHCP message at port 4011.");
 		}
-		packet_process(sockd, dhdat, NULL, 1);
+		packet_process(sockd, dhdat, gp.verbose);
 
 		fds[0].revents = 0;
 		fds[1].revents = 0;
