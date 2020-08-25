@@ -122,9 +122,9 @@ static int makeup_vendor_pxe(struct dhcp_option *opt, int lenrem)
 	vopt->code = PXE_BOOTMENU;
 	vopt->val[0] = 0x30;
 	vopt->val[1] = 1;
-	vopt->val[2] = strlen(PXE_PROMPT1);
+	vopt->val[2] = strlen(PXE_PROMPT1) + 1;
 	strcpy((char *)(vopt->val+3), PXE_PROMPT1);
-	vopt->len = vopt->val[2] + 4;
+	vopt->len = vopt->val[2] + 3;
 	vlen += sizeof(struct dhcp_option) + vopt->len;
 
 	vopt = dhcp_option_next(vopt);
@@ -145,6 +145,7 @@ static int makeup_vendor_pxe(struct dhcp_option *opt, int lenrem)
 static int pxe_ack(int sockd, struct dhcp_data *dhdat,
 		struct sockaddr_in *peer)
 {
+	logmsg(LINFO, "I will do a pxe ack.");
 	dhdat->dhpkt.header.op = DHCP_REP;
 	return 0;
 }
@@ -244,10 +245,10 @@ static int packet_process(int sockd, struct dhcp_data *dhdat, int verbose)
 		return len;
 	}
 	dhdat->len = len;
-	if (verbose)
-		dhcp_echo_packet(dhdat);
 	if (!dhcp_pxe(dhdat))
 		return len;
+	if (verbose)
+		dhcp_echo_packet(dhdat);
 
 	opt = dhcp_option_search(dhdat, DHCP_MSGTYPE);
 	if (!opt)

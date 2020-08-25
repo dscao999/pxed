@@ -107,24 +107,95 @@ static int dhcp_echo_head(const struct dhcp_packet *dhpkt)
 	return sizeof(struct dhcp_head);
 }
 
-static inline char *dhcp_opt2str(const struct dhcp_option *opt)
+static inline char *dhcp_opt2str(const unsigned char *str, int len)
 {
 	char *buf;
 
-	buf = malloc(opt->len + 1);
-	memcpy(buf, opt->val, opt->len);
-	*(buf+opt->len) = 0;
+	buf = malloc(len + 1);
+	memcpy(buf, str, len);
+	*(buf+len) = 0;
 	return buf;
 }
 
-static int dhcp_echo_option(const struct dhcp_option *opt)
+static int echo_pxe_option(const struct dhcp_option *opt)
+{
+	int len, i, idx, numips, bid, desclen;
+	char *buf;
+
+	len = 0;
+	switch(opt->code) {
+	case PXE_END:
+		llog("PXE Option Ends(%hhu).\n", opt->code);
+	case DHCP_PAD:
+		len = 1;
+		break;
+	case PXE_DISCTL:
+		llog("Discovery Control(%hhu): %02hhX\n", opt->code,
+				opt->val[0]);
+		break;
+	case PXE_BOOTSVR:
+		llog("PXE Boot Servers:\n");
+		idx = 0;
+		do {
+			bid = ((unsigned int)opt->val[idx] << 8) | opt->val[idx+1];
+			llog("\t\tBoot ID: %04X\n", bid);
+			idx += 2;
+			numips = opt->val[idx];
+			for (i = 0; i < numips; i++) {
+				llog("\t\t\t%hhu.%hhu.%hhu.%hhu\n",
+						opt->val[idx+1],
+						opt->val[idx+2],
+						opt->val[idx+3],
+						opt->val[idx+4]);
+				idx += 4;
+			}
+		} while (++idx < opt->len);
+		break;
+	case PXE_BOOTMENU:
+		llog("PXE Boot Menu:\n");
+		idx = 0;
+		do {
+			bid = ((unsigned int)opt->val[idx] << 8)|opt->val[idx+1];
+			llog("\t\tBoot ID: %04X", bid);
+			idx += 2;
+			desclen = opt->val[idx];
+			buf = dhcp_opt2str(opt->val+idx+1, desclen);
+			llog(" Menu: %s\n", buf);
+			free(buf);
+			idx += desclen + 1;
+		} while (idx < opt->len);
+		break;
+	case PXE_BOOTPROMPT:
+		llog("PXE Boot Prompt, Timeout: %hhd", opt->val[0]);
+		buf = dhcp_opt2str(opt->val+1, opt->len - 1);
+		llog(" Prompt: %s\n", buf);
+		free(buf);
+		break;
+	default:
+		llog("Option: %u, Length: %u, Vals:", opt->code,
+				opt->len);
+		for (i = 0; i < opt->len; i++)
+			llog(" %02hhX", opt->val[i]);
+		llog("\n");
+		break;
+	}
+
+	if (len == 0)
+		len = opt->len + sizeof(struct dhcp_option);
+	return len;
+}
+
+static int dhcp_echo_option(const struct dhcp_option *opt, int vendor)
 {
 	int len, venlen, i;
 	char *buf;
 	unsigned short arch;
 	const struct dhcp_option *inn;
 
-	len = opt->len + sizeof(struct dhcp_option);
+	if (vendor)
+		return echo_pxe_option(opt);
+
+	len = 0;
 	switch(opt->code) {
 	case DHCP_PAD:
 		len = 1;
@@ -135,7 +206,7 @@ static int dhcp_echo_option(const struct dhcp_option *opt)
 				opt->val[1], opt->val[2], opt->val[3]);
 		break;
 	case DHCP_CLNAME:
-		buf = dhcp_opt2str(opt);
+		buf = dhcp_opt2str(opt->val, opt->len);
 		llog("Client Host Name: %s\n", buf);
 		free(buf);
 		break;
@@ -145,7 +216,7 @@ static int dhcp_echo_option(const struct dhcp_option *opt)
 		venlen = 0;
 		while (inn) {
 			llog("\t");
-			venlen += dhcp_echo_option(inn);
+			venlen += dhcp_echo_option(inn, 1);
 			inn = dhcp_option_cnext(inn);
 		}
 		assert(opt->len == venlen);
@@ -197,7 +268,7 @@ static int dhcp_echo_option(const struct dhcp_option *opt)
 				(int)((opt->val[0] << 8) | opt->val[1]));
 		break;
 	case DHCP_CLASS:
-		buf = dhcp_opt2str(opt);
+		buf = dhcp_opt2str(opt->val, opt->len);
 		llog("Class ID: %s\n", buf);
 		free(buf);
 		break;
@@ -215,7 +286,7 @@ static int dhcp_echo_option(const struct dhcp_option *opt)
 		break;
 	case DHCP_END:
 		len = 1;
-		llog("DHCP Message End: %u\n", opt->code);
+		llog("DHCP Message End(%hhu).\n", opt->code);
 		break;
 	default:
 		llog("Option: %u, Length: %u, Vals:", opt->code,
@@ -225,6 +296,8 @@ static int dhcp_echo_option(const struct dhcp_option *opt)
 		llog("\n");
 		break;
 	}
+	if (len == 0)
+		len = opt->len + sizeof(struct dhcp_option);
 	return len;
 }
 
@@ -249,7 +322,7 @@ int dhcp_echo_packet(const struct dhcp_data *dhdat)
 		return dhdat->len;
 	opt = dhcp->options;
 	while (opt) {
-		len += dhcp_echo_option(opt);
+		len += dhcp_echo_option(opt, 0);
 		opt = dhcp_option_cnext(opt);
 	}
 	return len;
