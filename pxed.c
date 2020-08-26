@@ -125,13 +125,14 @@ exit_10:
 	return retv;
 }
 
-static const char PXE_PROMPT1[] = "PXE Investigation 1";
+static const char PXE_PROMPT1[] = "Legacy BIOS pxelinux";
+static const char PXE_PROMPT2[] = "UEFI64 grub";
 static const char PXE_PROMPT[] = "PXE Research";
 
 static int makeup_vendor_pxe(struct dhcp_option *opt, int lenrem,
 		const struct g_param *gp)
 {
-	int vlen;
+	int vlen, idx;
 	struct dhcp_option *vopt;
 
 	opt->code = DHCP_VENDOR;
@@ -154,7 +155,16 @@ static int makeup_vendor_pxe(struct dhcp_option *opt, int lenrem,
 	vopt->val[5] = (gp->svrip >> 16) & 0x0ff;
 	vopt->val[6] = gp->svrip >> 24;
 
-	vopt->len = 7;
+	vopt->val[7] = 0x30;
+	vopt->val[8] = 2;
+	vopt->val[9] = 1;
+
+	vopt->val[10] = gp->svrip & 0x0ff;
+	vopt->val[11] = (gp->svrip >> 8) & 0x0ff;
+	vopt->val[12] = (gp->svrip >> 16) & 0x0ff;
+	vopt->val[13] = gp->svrip >> 24;
+
+	vopt->len = 14;
 	vlen += sizeof(struct dhcp_option) + vopt->len;
 
 	vopt = dhcp_option_next(vopt);
@@ -163,7 +173,12 @@ static int makeup_vendor_pxe(struct dhcp_option *opt, int lenrem,
 	vopt->val[1] = 1;
 	vopt->val[2] = strlen(PXE_PROMPT1) + 1;
 	strcpy((char *)(vopt->val+3), PXE_PROMPT1);
-	vopt->len = vopt->val[2] + 3;
+	idx = strlen(PXE_PROMPT1) + 4;
+	vopt->val[idx] = 0x30;
+	vopt->val[idx+1] = 2;
+	vopt->val[idx+2] = strlen(PXE_PROMPT2) + 1;
+	strcpy((char *)(vopt->val+idx+3), PXE_PROMPT2);
+	vopt->len = idx + strlen(PXE_PROMPT2) + 4;
 	vlen += sizeof(struct dhcp_option) + vopt->len;
 
 	vopt = dhcp_option_next(vopt);
@@ -182,7 +197,8 @@ static int makeup_vendor_pxe(struct dhcp_option *opt, int lenrem,
 }
 
 static const char pxetag[] = "PXEClient";
-static const char bootfile[] = "/boot/grub/grub64.efi";
+static const char bootfile1[] = "/debian/pxelinux.0";
+static const char bootfile2[] = "/debian/bootnetx64.efi";
 
 static int make_pxe_ack(int sockd, struct dhcp_data *dhdat,
 		struct sockaddr_in *peer, const struct dhcp_option *vopt,
@@ -227,7 +243,14 @@ static int make_pxe_ack(int sockd, struct dhcp_data *dhdat,
 	snprintf(dhcp->header.sname, sizeof(dhcp->header.sname), "%u.%u.%u.%u",
 			gp->svrip & 0x0ff, (gp->svrip >> 8) & 0x0ff,
 			(gp->svrip >> 16) & 0x0ff, (gp->svrip >> 24));
-	strcpy(dhcp->header.bootfile, bootfile);
+	if (btype == 0x3001)
+		strcpy(dhcp->header.bootfile, bootfile1);
+	else if (btype == 0x3002)
+		strcpy(dhcp->header.bootfile, bootfile2);
+	else {
+		logmsg(LERR, "Invalid type of boot file.");
+		return 0;
+	}
 
 	optlen = 0;
 	opt = dhcp->options;

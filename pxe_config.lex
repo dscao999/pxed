@@ -23,7 +23,7 @@ IA64		{return IA64;}
 (?i:type)	{return TYPE;}
 (?i:desc)	{return DESC;}
 (?i:logfile)	{return LOGFILE;}
-(?i:port67)	{return PORT67;}
+(?i:verbose)	{return VERBOSE;}
 (?i:yes)	{return YES;}
 (?i:no)		{return NO;}
 [0-9]+		{	yylval.intval = atoi(yytext);

@@ -34,7 +34,7 @@ extern void yyrewind(void);
 %token <strval>	WORD
 %token <strval>	PHASE
 
-%token	BOOTFILE TYPE DESC TFROOT TMOUT PROMPT LOGFILE PORT67 YES NO
+%token	BOOTFILE TYPE DESC TFROOT TMOUT PROMPT LOGFILE VERBOSE YES NO
 %token	EFI64 EFI32 BIOS BIOS64 IA64
 
 %%
@@ -49,7 +49,7 @@ line:	'\n'
 	| timeout '\n'
 	| prompt '\n'
 	| logfile '\n'
-	| port67 '\n'
+	| verbose '\n'
 	| specs '\n' {
 		if(file_ok(pconf_g->bootsvrs[nospec].bfile)) {
 			pconf_g->bootsvrs[nospec].seq = VENDOR_TYPE + nospec;
@@ -99,8 +99,8 @@ logfile: LOGFILE '=' PATH {strncpy(pconf_g->logfile, $3, sizeof(pconf_g->logfile
 	| LOGFILE '=' WORD {strncpy(pconf_g->logfile, $3, sizeof(pconf_g->logfile));}
 	;
 
-port67: PORT67 '=' YES {pconf_g->m67 = 1;}
-	| PORT67 '=' NO {pconf_g->m67 = 0;}
+verbose: VERBOSE '=' YES {pconf_g->m67 = 1;}
+	| VERBOSE '=' NO {pconf_g->m67 = 0;}
 	;
 
 %%
@@ -110,6 +110,7 @@ static int file_ok(const char *filename)
 	int retv, sysret, len;
 	struct stat file_state;
 	char fname[256];
+	FILE *fin;
 
 	retv = 0;
 	if (!filename || *filename == 0) goto z_exit;
@@ -117,18 +118,22 @@ static int file_ok(const char *filename)
 	len = strlen(tftp_root);
 	if (len > 0) {
 		strcpy(fname, tftp_root);
-		if (fname[len-1] != '/' &&
-		  *filename != '/')
+		if (fname[len-1] != '/' && *filename != '/')
 			strcat(fname, "/");
 		strcat(fname, filename);
 	} else
 		strcpy(fname, filename);
 	sysret = stat(fname, &file_state);
-	if (sysret == -1) goto z_exit;
-	if (S_ISREG(file_state.st_mode))
-		retv = 1;
+	if (sysret == -1)
+		goto exit_10;
+	if (!S_ISREG(file_state.st_mode))
+		goto exit_10;
+	fin = fopen(fname, "rb");
+	if (!fin)
+		goto exit_10;
+	fclose(fin);
 
-z_exit:
+exit_10:
 	return retv;
 }
 
