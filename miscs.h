@@ -25,7 +25,7 @@ void dump_stack(void);
 #define ENOMEM	12
 #define ENOSPACE	112
 
-enum LOGLVL {LERR = 5, LINFO = 1, LABORT = 9};
+enum LOGLVL {LERR = 5, LWARN = 4, LINFO = 1, LABORT = 9};
 
 static inline unsigned int swap32(unsigned int x)
 {

@@ -5,7 +5,7 @@ endif
 
 .PHONEY:	all clean release
 
-CFLAGS = -Wall -D_GNU_SOURCE -g
+CFLAGS = -W -Wall -D_GNU_SOURCE -g
 LDFLAGS = -g
 
 all:	pxed retv pxem

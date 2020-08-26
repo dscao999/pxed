@@ -177,18 +177,116 @@ static int makeup_vendor_pxe(struct dhcp_option *opt, int lenrem,
 	vopt->code = PXE_END;
 
 	opt->len = vlen + 1;
-	assert(opt->len + sizeof(struct dhcp_option) < lenrem);
+	assert(opt->len + sizeof(struct dhcp_option) < (unsigned int)lenrem);
 	return sizeof(struct dhcp_option) + opt->len;
 }
 
+static const char pxetag[] = "PXEClient";
+static const char bootfile[] = "/boot/grub/grub64.efi";
+
 static int make_pxe_ack(int sockd, struct dhcp_data *dhdat,
-		struct sockaddr_in *peer, const struct dhcp_opton *vopt,
+		struct sockaddr_in *peer, const struct dhcp_option *vopt,
 		const struct g_param *gp)
 {
+	struct dhcp_packet *dhcp;
+	const struct dhcp_option *c_opt;
+	struct dhcp_option *opt, *venopt;
+	int btype, layer, optlen, len;
+	unsigned char uuid[17];
+
+	c_opt = dhcp_option_search(dhdat, DHCP_SVRID);
+	if (c_opt && memcmp(c_opt->val, &gp->svrip, 4) != 0)
+		return 0;
+
+	c_opt = dhcp_option_search(dhdat, DHCP_CUUID);
+	if (!c_opt)
+		c_opt = dhcp_option_search(dhdat, DHCP_CMUID);
+	memset(uuid, 0, sizeof(uuid));
+	if (unlikely(!c_opt))
+		logmsg(LERR, "No UUID Info in DHCP PXE request.");
+	else {
+		assert(c_opt->len == 17);
+		memcpy(uuid, c_opt->val, c_opt->len);
+	}
+
 	logmsg(LINFO, "I will do a pxe ack.");
-	dhdat->dhpkt.header.op = DHCP_REP;
-	return 0;
+	btype = (vopt->val[0] << 8) | vopt->val[1];
+	layer = (vopt->val[2] << 8) | vopt->val[3];
+	if (layer & 0x80) {
+		logmsg(LWARN, "Secure Boot not supported now.");
+		return 0;
+	}
+
+	dhcp = &dhdat->dhpkt;
+	dhcp->header.op = DHCP_REP;
+	dhcp->header.secs = 0;
+	memset(&dhcp->header.ciaddr, 0, 8);
+	dhcp->header.siaddr = gp->svrip;
+	memset(dhcp->header.sname, 0, sizeof(dhcp->header.sname) +
+			sizeof(dhcp->header.bootfile));
+	snprintf(dhcp->header.sname, sizeof(dhcp->header.sname), "%u.%u.%u.%u",
+			gp->svrip & 0x0ff, (gp->svrip >> 8) & 0x0ff,
+			(gp->svrip >> 16) & 0x0ff, (gp->svrip >> 24));
+	strcpy(dhcp->header.bootfile, bootfile);
+
+	optlen = 0;
+	opt = dhcp->options;
+	opt->code = DHCP_MSGTYPE;
+	opt->len = 1;
+	opt->val[0] = DHCP_ACK;
+	optlen += sizeof(struct dhcp_option) + opt->len;
+
+	opt = dhcp_option_next(opt);
+	opt->code = DHCP_SVRID;
+	opt->len = 4;
+	opt->val[0] = gp->svrip & 0x0ff;
+	opt->val[1] = (gp->svrip >> 8) & 0x0ff;
+	opt->val[2] = (gp->svrip >> 16) & 0x0ff;
+	opt->val[3] = gp->svrip >> 24;
+	optlen += sizeof(struct dhcp_option) + opt->len;
+
+	opt = dhcp_option_next(opt);
+	opt->code = DHCP_CMUID;
+	opt->len = 17;
+	memcpy(opt->val, uuid, opt->len);
+	optlen += sizeof(struct dhcp_option) + opt->len;
+
+	opt = dhcp_option_next(opt);
+	opt->code = DHCP_CLASS;
+	opt->len = strlen(pxetag);
+	memcpy(opt->val, pxetag, opt->len);
+	optlen += sizeof(struct dhcp_option) + opt->len;
+
+	opt = dhcp_option_next(opt);
+	opt->code = DHCP_VENDOR;
+	venopt = (struct dhcp_option *)opt->val;
+	venopt->code = PXE_BOOTITEM;
+	venopt->len = 4;
+	venopt->val[0] = (btype >> 8) & 0x0ff;
+	venopt->val[1] = btype & 0x0ff;
+	venopt->val[2] = 0;
+	venopt->val[3] = 0;
+	venopt = dhcp_option_next(venopt);
+	venopt->code = PXE_END;
+	opt->len = 7;
+	optlen += sizeof(struct dhcp_option) + opt->len;
+
+	opt = dhcp_option_next(opt);
+	opt->code = DHCP_END;
+	optlen += 1;
+
+	dhdat->len = sizeof(struct dhcp_head) + optlen;
+	if (peer->sin_addr.s_addr == 0)
+		inet_pton(AF_INET, "255.255.255.255", &peer->sin_addr);
+	len = sendto(sockd, dhcp, dhdat->len, 0,
+			(const struct sockaddr *)peer,
+			sizeof(struct sockaddr_in));
+	if (unlikely(len != dhdat->len))
+		logmsg(LERR, "PXE Ack, sendto failed: %s", strerror(errno));
+
+	return len;
 }
+
 static int make_pxe_offer(int sockd, struct dhcp_data *dhdat,
 		struct sockaddr_in *peer, const struct g_param *gp)
 {
@@ -204,7 +302,7 @@ static int make_pxe_offer(int sockd, struct dhcp_data *dhdat,
 		c_opt = dhcp_option_search(dhdat, DHCP_CMUID);
 	memset(uuid, 0, sizeof(uuid));
 	if (unlikely(!c_opt))
-		logmsg(LERR, "No UUID Info in DHCP PXE request.");
+		logmsg(LERR, "No UUID Info in DHCP PXE discover.");
 	else {
 		assert(c_opt->len == 17);
 		memcpy(uuid, c_opt->val, c_opt->len);
@@ -243,8 +341,8 @@ static int make_pxe_offer(int sockd, struct dhcp_data *dhdat,
 
 	opt = dhcp_option_next(opt);
 	opt->code = DHCP_CLASS;
-	opt->len = 9;
-	memcpy(opt->val, "PXEClient", 9);
+	opt->len = strlen(pxetag);
+	memcpy(opt->val, pxetag, opt->len);
 	optlen += sizeof(struct dhcp_option) + opt->len;
 
 	lenrem = maxlen - sizeof(struct dhcp_head) - optlen;
@@ -319,7 +417,7 @@ static int packet_process(int sockd, struct dhcp_data *dhdat,
 		vopt = get_boot_item(opt);
 		if (vopt) {
 			len = make_pxe_ack(sockd, dhdat, &srcaddr, vopt, gp);
-			if (gp->verbose)
+			if (len > 0 && gp->verbose)
 				dhcp_echo_packet(dhdat);
 		}
 	} else
@@ -414,13 +512,12 @@ int main(int argc, char *argv[])
 		
 		if (fds[0].revents) {
 			sockd = fds[0].fd;
-			logmsg(LINFO, "Receive a DHCP message at port 67.");
+			packet_process(sockd, dhdat, &gp);
 		}
 		if (fds[1].revents) {
 			sockd = fds[1].fd;
-			logmsg(LINFO, "Receive a DHCP message at port 4011.");
+			packet_process(sockd, dhdat, &gp);
 		}
-		packet_process(sockd, dhdat, &gp);
 
 		fds[0].revents = 0;
 		fds[1].revents = 0;
