@@ -3,34 +3,21 @@
 %}
 
 %option  noyywrap
-NAME	[[:alpha:][[:alnum:]\-_.]*
+NAME	[:alpha:][[:alnum:]\-_.]*
 %%
 
 #.*$		;
-\\\n		;
 [ \t]+		;
 \n		{return '\n';}
 =		{return '=';}
-^tftp" "+root	{return TFROOT;}
-^timeout	{return TMOUT;}
-^prompt		{return PROMPT;}
-BIOS		{return BIOS;}
-BIOS64		{return BIOS64;}
-EFI64		{return EFI64;}
-EFI32		{return EFI32;}
-IA64		{return IA64;}
-(?i:bfile)    	{return BOOTFILE;}
-(?i:type)	{return TYPE;}
-(?i:desc)	{return DESC;}
-(?i:logfile)	{return LOGFILE;}
-(?i:verbose)	{return VERBOSE;}
-(?i:yes)	{return YES;}
-(?i:no)		{return NO;}
-[0-9]+		{	yylval.intval = atoi(yytext);
-			return NUMBER; }
-\"[^\"]+\"		{*(yytext+yyleng-1) = 0; yylval.strval = yytext+1;
-			return PHASE;}
-{NAME}		{yylval.strval = yytext;
-			return WORD; }
-\/?{NAME}(\/{NAME})* {yylval.strval = yytext;
-					return PATH;}
+tftp[ \t]+root	{return TFTP_ROOT;}
+timeout		{return TMOUT;}
+prompt		{return PROMPT;}
+X86_BIOS	{return TX86_BIOS;}
+X86_64_EFI	{return TX86_64_EFI;}
+IA64_EFI	{return TIA64_EFI;}
+bootfile	{return BOOT_FILE;}
+desc		{return DESC;}
+{NAME}		{yylval.strval = yytext; printf("'at X': %s\n", yytext);return WORD; }
+\/{NAME}(\/{NAME})*\/? {yylval.strval = yytext; return PATH;}
+\"{NAME}([ \t]+{NAME})*\" {yytext[yyleng-1] = 0; yylval.strval = yytext+1; return PHRASE;}

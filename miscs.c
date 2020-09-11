@@ -3,6 +3,8 @@
 #include <execinfo.h>
 #include <time.h>
 #include <sched.h>
+#include <errno.h>
+#include <string.h>
 #include "miscs.h"
 
 #define STACK_DEPTH	64
@@ -14,6 +16,7 @@ struct trace_buf {
 
 static struct trace_buf tbuf = {.lock = 0};
 static const char *nomem = "Out of Memory!\n";
+static FILE *ilog = NULL;
 
 void dump_stack(void)
 {
@@ -28,6 +31,36 @@ void dump_stack(void)
 	depth = backtrace(tbuf.trace, STACK_DEPTH);
 	backtrace_symbols_fd(tbuf.trace, depth, fileno(stderr));
 	tbuf.lock = 0;
+}
+
+int miscs_init(const char *logfile)
+{
+	int retv = 0;
+
+	ilog = fopen(logfile, "ab");
+	if (!ilog) {
+		retv = 1;
+		logmsg(LERR, "Cannot open log file \"%s\": %s\n", logfile,
+				strerror(errno));
+	}
+	return retv;
+}
+
+void miscs_exit(void)
+{
+	if (ilog)
+		fclose(ilog);
+}
+
+int llog(const char *fmt, ...)
+{
+	va_list ap;
+	int len;
+
+	va_start(ap, fmt);
+	len = vfprintf(ilog, fmt, ap);
+	va_end(ap);
+	return len+1;
 }
 
 void logmsg(int level, const char *fmt, ...)

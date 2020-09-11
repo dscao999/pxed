@@ -21,7 +21,7 @@ static volatile int global_exit = 0;
 
 #define PXE_DISC_SET	0x06
 
-void sig_handler(int sig)
+static void sig_handler(int sig)
 {
 	if (sig == SIGINT || sig == SIGTERM)
 		global_exit = 1;
@@ -29,9 +29,11 @@ void sig_handler(int sig)
 
 struct g_param {
 	const char *conf;
+	const char *logfile;
 	char iface[16];
 	unsigned int svrip;
-	int verbose;
+	unsigned short mp_size;
+	unsigned short verbose;
 };
 
 static int svrip_init(struct g_param *gp)
@@ -94,7 +96,7 @@ static int poll_init(const struct g_param *gp, struct pollfd *pfd, int port)
 		sysret = setsockopt(sockd, SOL_SOCKET, SO_BROADCAST,
 				&broadcast, 4);
 		if (sysret == -1) {
-			logmsg(LERR, "Cannot enable socket to broadcast: %s",
+			logmsg(LERR, "Cannot enable socket broadcasting: %s",
 					strerror(errno));
 			retv = errno;
 			goto exit_30;
@@ -317,23 +319,33 @@ static int make_pxe_offer(int sockd, struct dhcp_data *dhdat,
 	struct dhcp_option *opt;
 	const struct dhcp_option *c_opt;
 	int optlen = 0, maxlen = 1024, lenrem, len;
+	unsigned short clarch;
 	unsigned char uuid[17];
+	char ip[64];
 	
 	dhcp = &dhdat->dhpkt;
-	c_opt = dhcp_option_search(dhdat, DHCP_CUUID);
-	if (!c_opt)
-		c_opt = dhcp_option_search(dhdat, DHCP_CMUID);
+	c_opt = dhcp_option_search(dhdat, DHCP_CMUID);
 	memset(uuid, 0, sizeof(uuid));
-	if (unlikely(!c_opt))
+	if (unlikely(!c_opt)) {
 		logmsg(LERR, "No UUID Info in DHCP PXE discover.");
-	else {
-		assert(c_opt->len == 17);
+		return 0;
+	} else {
+		if (c_opt->len != 17)
+			logmsg(LERR, "Clinet UUID length: %hhu\n", c_opt->len);
 		memcpy(uuid, c_opt->val, c_opt->len);
 	}
+	c_opt = dhcp_option_search(dhdat, DHCP_CLARCH);
+	if (unlikely(!c_opt)) {
+		logmsg(LERR, "PXE DHCP discover has no client arch option.");
+		return 0;
+	} else {
+		clarch = (c_opt->val[0] << 8) | copt->val[1];
+	}
 	c_opt = dhcp_option_search(dhdat, DHCP_MAXLEN);
-	if (unlikely(!c_opt))
+	if (unlikely(!c_opt)) {
 		logmsg(LERR, "PXE DHCP discover has no max packet size.");
-	else
+		maxlen = dhdat->maxlen;
+	} else
 		maxlen = (c_opt->val[0] << 8) | c_opt->val[1];
 
 	dhcp->header.op = DHCP_REP;
@@ -363,6 +375,12 @@ static int make_pxe_offer(int sockd, struct dhcp_data *dhdat,
 	optlen += sizeof(struct dhcp_option) + opt->len;
 
 	opt = dhcp_option_next(opt);
+	opt->code = DHCP_CLARCH;
+	opt->len = 2;
+	opt->val[0] = clarch >> 8;
+	opt->val[1] = clarch & 0x0ff;
+
+	opt = dhcp_option_next(opt);
 	opt->code = DHCP_CLASS;
 	opt->len = strlen(pxetag);
 	memcpy(opt->val, pxetag, opt->len);
@@ -379,6 +397,10 @@ static int make_pxe_offer(int sockd, struct dhcp_data *dhdat,
 
 	if (peer->sin_addr.s_addr == 0)
 		inet_pton(AF_INET, "255.255.255.255", &peer->sin_addr);
+	else
+		logmsg(LWARN, "A Discover packet with a client address: %s\n",
+				inet_ntop(AF_INET, &peer->sin_addr, 
+				ip, sizeof(ip)));
 	dhdat->len = sizeof(struct dhcp_head) + optlen;
 	len = sendto(sockd, dhcp, dhdat->len, 0,
 			(const struct sockaddr *)peer,
@@ -459,8 +481,10 @@ static void gparam_init(int argc, char *argv[], struct g_param *gp)
 	gp->iface[0] = 0;
 	gp->svrip = 0;
 	gp->verbose = 0;
+	gp->mp_size = 2048;
+	gp->logfile = NULL;
 	do {
-		opt = getopt(argc, argv, ":c:i:v");
+		opt = getopt(argc, argv, ":c:i:vm:l:");
 		switch(opt) {
 		case -1:
 			fin = 1;
@@ -470,6 +494,12 @@ static void gparam_init(int argc, char *argv[], struct g_param *gp)
 			break;
 		case ':':
 			logmsg(LERR, "Missing argument for %c", (char)optopt);
+			break;
+		case 'l':
+			gp->logfile = optarg;
+			break;
+		case 'm':
+			gp->mp_size = atoi(optarg);
 			break;
 		case 'c':
 			gp->conf = optarg;
@@ -499,8 +529,13 @@ int main(int argc, char *argv[])
 	static struct g_param gp;
 
 	gparam_init(argc, argv, &gp);
+	miscs_init(gp->logfile);
 	if (svrip_init(&gp))
 		return 1;
+	logmsg(LINFO, "Listening on %u.%u.%u.%u, dev: %s",
+			gp.svrip & 0x0ff, (gp.svrip >> 8) & 0x0ff,
+			(gp.svrip >> 16) & 0x0ff,
+			gp.svrip >> 24, gp.iface);
 
 	memset(fds, 0, sizeof(fds));
 	retv = 0;
@@ -512,9 +547,9 @@ int main(int argc, char *argv[])
 		logmsg(LERR, "Signal Handler Cannot be setup: %s\n",
 				strerror(errno));
 
-	dhdat = malloc(2048);
+	dhdat = malloc(gp.mp_size);
 	check_pointer(dhdat);
-	dhdat->maxlen = 2048 - offsetof(struct dhcp_data, dhpkt);
+	dhdat->maxlen = gp.mp_size - offsetof(struct dhcp_data, dhpkt);
 
 	retv = poll_init(&gp, fds, 67);
 	if (retv != 0)
@@ -536,16 +571,16 @@ int main(int argc, char *argv[])
 		if (fds[0].revents) {
 			sockd = fds[0].fd;
 			packet_process(sockd, dhdat, &gp);
+			fds[0].revents = 0;
 		}
 		if (fds[1].revents) {
 			sockd = fds[1].fd;
 			packet_process(sockd, dhdat, &gp);
+			fds[1].revents = 0;
 		}
-
-		fds[0].revents = 0;
-		fds[1].revents = 0;
 	} while (global_exit == 0);
 
+	miscs_exit();
 exit_30:
 	close(fds[1].fd);
 exit_20:

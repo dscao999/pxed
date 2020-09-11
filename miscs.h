@@ -37,7 +37,10 @@ static inline unsigned int swap32(unsigned int x)
 	return (u.b[0] << 24)|(u.b[1] << 16)|(u.b[2] << 8)|u.b[3];
 }
 
+int miscs_init(const char *logfile);
+void miscs_exit(void);
 void logmsg(int level, const char *fmt, ...);
+int llog(const char *fmt, ...);
 
 void *check_pointer(void *ptr);
 

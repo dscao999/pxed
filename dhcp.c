@@ -47,17 +47,6 @@ dhcp_option_search(const struct dhcp_data *dhdat, int opt)
 	return option;
 } 
 
-static int llog(const char *fmt, ...)
-{
-	va_list ap;
-	int len;
-
-	va_start(ap, fmt);
-	len = vprintf(fmt, ap);
-	va_end(ap);
-	return len+1;
-}
-
 static inline void dhcp_echo_ip(const unsigned int ip)
 {
 	llog("%d.%d.%d.%d", ip & 0x0ff, (ip >> 8) & 0x0ff,

@@ -3,14 +3,15 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <string.h>
-#include "misc.h"
-#include "pxe_util.h"
+#include <errno.h>
+#include "miscs.h"
+#include "pxed_config.h"
 
-#define VENDOR_TYPE 32769
-
-static int nospec = 0;
-extern pxe_config_t *pconf_g;
-extern int conferr;
+static int noboot = 0;
+static char tftp_root[64];
+static int config_err = 0;
+static struct boot_option b_opt;
+const struct boot_option *bopt;
 }
 
 %union {
@@ -24,8 +25,6 @@ extern char *yytext;
 extern int yylex(void);
 static int file_ok(const char *filename);
 extern int yyerror(const char *s);
-static char tftp_root[MAXPATH];
-extern void yyrewind(void);
 }
 
 
@@ -34,31 +33,27 @@ extern void yyrewind(void);
 %token <strval>	WORD
 %token <strval>	PHASE
 
-%token	BOOTFILE TYPE DESC TFROOT TMOUT PROMPT LOGFILE VERBOSE YES NO
-%token	EFI64 EFI32 BIOS BIOS64 IA64
+%token	BOOT_FILE DESC TFTP_ROOT TMOUT PROMPT PHRASE
+%token	TX86_64_EFI TX86_BIOS TIA64_EFI
 
 %%
 
-input:	/* empty */
+input:	line
 	| input line
 	;
 
 
 line:	'\n'
-	| tfroot '\n'
+	| tftp_root '\n'
 	| timeout '\n'
 	| prompt '\n'
-	| logfile '\n'
-	| verbose '\n'
 	| specs '\n' {
-		if(file_ok(pconf_g->bootsvrs[nospec].bfile)) {
-			pconf_g->bootsvrs[nospec].seq = VENDOR_TYPE + nospec;
-			nospec++;
-			pconf_g->svrs = nospec;
+		if(file_ok(bopt->bitems[noboot].bootfile)) {
+			noboot++;
 		} else {
-			errlog("An Invalid File Specification: %s\n",
-				pconf_g->bootsvrs[nospec].bfile);
-			conferr = 1;
+			logmsg(LERR, "An Invalid File Specification: %s\n",
+				b_opt.bitems[noboot].bootfile);
+			config_err = 1;
 		}
 	}
 	;
@@ -67,42 +62,25 @@ specs:	spec
 	| specs spec
 	;
 
-spec:	TYPE '=' EFI64 {pconf_g->bootsvrs[nospec].type = X86_64_EFI;}
-	| TYPE '=' EFI32 {pconf_g->bootsvrs[nospec].type = I386_EFI;}
-	| TYPE '=' BIOS {pconf_g->bootsvrs[nospec].type = I386_BIOS;}
-	| TYPE '=' BIOS64 {pconf_g->bootsvrs[nospec].type = X86_64_BIOS;}
-	| TYPE '=' IA64 {pconf_g->bootsvrs[nospec].type = IA64_EFI;}
-	| BOOTFILE '=' PATH {strncpy(pconf_g->bootsvrs[nospec].bfile, $3, MAXPATH);
-				pconf_g->bootsvrs[nospec].blen = strlen($3);}
-	| BOOTFILE '=' WORD {strncpy(pconf_g->bootsvrs[nospec].bfile, $3, MAXPATH);
-				pconf_g->bootsvrs[nospec].blen = strlen($3);}
-	| DESC '=' WORD {strncpy(pconf_g->bootsvrs[nospec].desc, $3, MAXSTRING);
-			pconf_g->bootsvrs[nospec].dlen = strlen($3);}
-	| DESC '=' PHASE {strncpy(pconf_g->bootsvrs[nospec].desc, $3, MAXSTRING);
-			pconf_g->bootsvrs[nospec].dlen = strlen($3);}
+spec:	TX86_64_EFI {b_opt.bitems[noboot].clarch = X86_64_EFI;}
+	| TX86_BIOS {b_opt.bitems[noboot].clarch = X86_BIOS;}
+	| TIA64_EFI {b_opt.bitems[noboot].clarch = IA64_EFI;}
+	| BOOT_FILE '=' PATH {strncpy(b_opt.bitems[noboot].bootfile, $3, MAX_PATH);}
+	| BOOT_FILE '=' WORD {strncpy(b_opt.bitems[noboot].bootfile, $3, MAX_PATH);}
+	| DESC '=' WORD {strncpy(b_opt.bitems[noboot].desc, $3, MAX_PHRASE);}
+	| DESC '=' PHASE {strncpy(b_opt.bitems[noboot].desc, $3, MAX_PHRASE);}
 	;
 
-tfroot: TFROOT '=' PATH {strncpy(tftp_root, $3, MAXPATH);}
-	| TFROOT '=' WORD {strncpy(tftp_root, $3, MAXPATH);}
+tftp_root: TFTP_ROOT '=' PATH {strncpy(tftp_root, $3, sizeof(tftp_root)); fprintf(stderr, "At tftp root path\n");}
+	| TFTP_ROOT '=' WORD {strncpy(tftp_root, $3, sizeof(tftp_root)); fprintf(stderr, "at tftp root word %s\n", $3);}
 	;
 
-timeout: TMOUT '=' NUMBER {pconf_g->timeout = $3;}
+timeout: TMOUT '=' NUMBER {b_opt.timeout = $3;}
 	;
 
-prompt:	PROMPT '=' PHASE {strncpy(pconf_g->prompt, $3, MAXSTRING);
-			pconf_g->plen = strlen(pconf_g->prompt);}
-	| PROMPT '=' WORD {strncpy(pconf_g->prompt, $3, MAXSTRING);
-			pconf_g->plen = strlen(pconf_g->prompt);}
+prompt:	PROMPT '=' PHASE {strncpy(b_opt.prompt, $3, sizeof(b_opt.prompt));}
+	| PROMPT '=' WORD {strncpy(b_opt.prompt, $3, sizeof(b_opt.prompt));}
 	;
-
-logfile: LOGFILE '=' PATH {strncpy(pconf_g->logfile, $3, sizeof(pconf_g->logfile));}
-	| LOGFILE '=' WORD {strncpy(pconf_g->logfile, $3, sizeof(pconf_g->logfile));}
-	;
-
-verbose: VERBOSE '=' YES {pconf_g->m67 = 1;}
-	| VERBOSE '=' NO {pconf_g->m67 = 0;}
-	;
-
 %%
 
 static int file_ok(const char *filename)
@@ -113,7 +91,8 @@ static int file_ok(const char *filename)
 	FILE *fin;
 
 	retv = 0;
-	if (!filename || *filename == 0) goto z_exit;
+	if (!filename || *filename == 0)
+		return retv;
 
 	len = strlen(tftp_root);
 	if (len > 0) {
@@ -132,6 +111,7 @@ static int file_ok(const char *filename)
 	if (!fin)
 		goto exit_10;
 	fclose(fin);
+	retv = 1;
 
 exit_10:
 	return retv;
@@ -139,10 +119,29 @@ exit_10:
 
 int yyerror(const char *msg)
 {
-        errlog("%d: %s at %s\n", yylineno, msg, yytext);
+        logmsg(LERR, "%d: %s at %s\n", yylineno, msg, yytext);
         return 0;
 }
-void yyrewind(void)
+
+extern FILE *yyin;
+extern int yyparse(void);
+
+int pxed_config(const char *confname)
 {
-	nospec = 0;
+	int retc;
+
+	bopt = &b_opt;
+	yyin = fopen(confname, "rb");
+	if (unlikely(!yyin)) {
+		logmsg(LERR, "Cannot open config file \"%s\": %s\n", confname,
+				strerror(errno));
+		return -1;
+	}
+	retc = yyparse();
+	if (retc) {
+		yyerror("WHERE? ");
+		logmsg(LERR, "Configuration File Error: %d\n", retc);
+		return -2;
+	}
+	return 0;
 }
