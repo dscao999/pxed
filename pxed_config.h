@@ -22,12 +22,12 @@ struct boot_item {
 	char desc[MAX_PHRASE];
 	char bootfile[MAX_PATH];
 	enum client_arch clarch;
+	unsigned short svrtyp;
 };
 
 struct boot_option {
 	unsigned int bvip;
         unsigned short timeout;
-	unsigned short svrtyp;
         char prompt[MAX_PHRASE];
 	struct boot_item bitems[MAX_NUM_ITEMS];
 };

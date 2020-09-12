@@ -35,7 +35,7 @@ static int file_ok(const char *filename);
 %token <strval>	PHRASE
 %token <strval>	DIRECT
 
-%token	BOOT_FILE DESC TFTP_ROOT TMOUT PROMPT SVRTYP
+%token	BOOT_FILE DESC TFTP_ROOT TMOUT PROMPT
 %token	TX86_64_EFI TX86_BIOS TIA64_EFI
 
 %%
@@ -46,12 +46,12 @@ specs:	/* empty */
 	;
 
 
-spec:	tftp_root 
-	| timeout 
-	| prompt 
-	| server_type
-	| bspec  {
+spec:	tftp_root
+	| timeout
+	| prompt
+	| bspec {
 		if(file_ok(bopt->bitems[noboot].bootfile)) {
+			b_opt.bitems[noboot].svrtyp = 0x3001 + noboot;
 			noboot++;
 		} else {
 			logmsg(LERR, "An Invalid File Specification: %s\n",
@@ -73,7 +73,6 @@ bitem:	TX86_64_EFI {b_opt.bitems[noboot].clarch = X86_64_EFI;}
 	| DESC '=' PHRASE {strncpy(b_opt.bitems[noboot].desc, $3, MAX_PHRASE);}
 	;
 
-server_type: SVRTYP '=' NUMBER {b_opt.svrtyp = $3;}
 tftp_root: TFTP_ROOT '=' DIRECT {strncpy(tftp_root, $3, sizeof(tftp_root));}
 	;
 
@@ -128,7 +127,6 @@ int pxed_config(const char *confname)
 	int retc, i;
 	const struct boot_item *btm;
 
-	b_opt.svrtyp = 0x3001;
 	bopt = &b_opt;
 	yyin = fopen(confname, "rb");
 	if (unlikely(!yyin)) {
@@ -145,10 +143,10 @@ int pxed_config(const char *confname)
 	printf("TFTP Root: %s\n", tftp_root);
 	printf("Timeout: %d\n", bopt->timeout);
 	printf("Prompt: %s\n", bopt->prompt);
-	printf("Boot Server Type: %04hX\n", bopt->svrtyp);
 	printf("Number boot items: %d\n", noboot);
 	for (i = 0, btm = bopt->bitems; i < noboot; i++, btm++) {
 		printf("Boot Item: %d:\n", i);
+		printf("\tBoot Server Type: %04hX\n", btm->svrtyp);
 		printf("\tClient Type: %d\n", (int)btm->clarch);
 		printf("\tDescription: %s\n", btm->desc);
 		printf("\tBoot File: %s\n", btm->bootfile);

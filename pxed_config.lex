@@ -1,5 +1,5 @@
 %{
-#include "pxe_config.tab.h"
+#include "pxed_config.tab.h"
 
 int lineno = 1;
 %}
@@ -13,7 +13,6 @@ NAME	[a-zA-Z][a-zA-Z0-9_.\-]*
 \n		{lineno++;}
 =		{return '=';}
 tftp[ \t]+root	{return TFTP_ROOT;}
-boot[ \t]+server[ \t]+type {return SVRTYP;}
 timeout		{return TMOUT;}
 prompt		{return PROMPT;}
 X86_BIOS	{return TX86_BIOS;}

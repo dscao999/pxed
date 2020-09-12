@@ -10,7 +10,7 @@ LDFLAGS = -g
 
 all:	pxed retv pxem conftx
 
-conftx: conf_test.o  pxe_config.tab.o lex.yy.o miscs.o
+conftx: conf_test.o  pxed_config.tab.o lex.yy.o miscs.o
 	$(LINK.o) $^ -o $@
 
 pxem:	pxe_monitor.o dhcp.o miscs.o
@@ -22,17 +22,17 @@ pxed:	pxed.o dhcp.o miscs.o
 retv:	retrieve.o dhcp.o
 	$(LINK.o) $^ -o $@
 
-lex.yy.o: lex.yy.c pxe_config.tab.h
+lex.yy.o: lex.yy.c pxed_config.tab.h
 
-lex.yy.c: pxe_config.lex
-	flex	pxe_config.lex
+lex.yy.c: pxed_config.lex
+	flex	pxed_config.lex
 
-pxe_config.tab.c pxe_config.tab.h: pxe_config.y
-	bison -d pxe_config.y
+pxed_config.tab.c pxed_config.tab.h: pxed_config.y
+	bison -d pxed_config.y
 
 clean:
-	rm -f pxed pxem retv *.o
-	rm -f pxe_config.tab.c lex.yy.c
+	rm -f pxed conftx pxem retv *.o
+	rm -f pxed_config.tab.c lex.yy.c pxed_config.tab.h
 
 release:	CFLAGS += -DNDEBUG -O2
 
