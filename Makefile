@@ -10,6 +10,9 @@ LDFLAGS = -g
 
 all:	pxed retv pxem conftx
 
+srcs = $(wildcard *.c)
+deps = $(srcs:.c=.d)
+
 conftx: conf_test.o  pxed_config.tab.o lex.yy.o miscs.o
 	$(LINK.o) $^ -o $@
 
@@ -22,13 +25,11 @@ pxed:	pxed.o dhcp.o miscs.o
 retv:	retrieve.o dhcp.o
 	$(LINK.o) $^ -o $@
 
-lex.yy.o: lex.yy.c pxed_config.tab.h
-
 lex.yy.c: pxed_config.lex
 	flex	pxed_config.lex
 
 pxed_config.tab.c pxed_config.tab.h: pxed_config.y
-	bison -d pxed_config.y
+	bison -d -v pxed_config.y
 
 clean:
 	rm -f pxed conftx pxem retv *.o
@@ -39,3 +40,8 @@ release:	CFLAGS += -DNDEBUG -O2
 release:	LDFLAGS += -O2
 
 release:	all
+
+%.o: %.c
+	$(COMPILE.c) -MMD -MP -c $< -o $@
+
+-include $(deps)

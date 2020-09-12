@@ -42,7 +42,7 @@ static int svrip_init(struct g_param *gp)
 	int family, retv;
 	struct sockaddr_in *inaddr;
 
-	retv = 1;
+	retv = -1;
 	if (getifaddrs(&ifaddr) == -1) {
 		perror("getifaddrs failed");
 		return retv;
@@ -127,10 +127,6 @@ exit_10:
 	return retv;
 }
 
-static const char PXE_PROMPT1[] = "Legacy BIOS pxelinux";
-static const char PXE_PROMPT2[] = "UEFI64 grub";
-static const char PXE_PROMPT[] = "PXE Research";
-
 static int makeup_vendor_pxe(struct dhcp_option *opt, int lenrem,
 		const struct g_param *gp)
 {
@@ -148,25 +144,14 @@ static int makeup_vendor_pxe(struct dhcp_option *opt, int lenrem,
 
 	vopt = dhcp_option_next(vopt);
 	vopt->code = PXE_BOOTSVR;
-	vopt->val[0] = 0x30;
-	vopt->val[1] = 1;
+	vopt->val[0] = b_opt->svrtyp >> 8;
+	vopt->val[1] = b_opt->svrtyp & 0x0ff;
 	vopt->val[2] = 1;
-
 	vopt->val[3] = gp->svrip & 0x0ff;
 	vopt->val[4] = (gp->svrip >> 8) & 0x0ff;
 	vopt->val[5] = (gp->svrip >> 16) & 0x0ff;
 	vopt->val[6] = gp->svrip >> 24;
-
-	vopt->val[7] = 0x30;
-	vopt->val[8] = 2;
-	vopt->val[9] = 1;
-
-	vopt->val[10] = gp->svrip & 0x0ff;
-	vopt->val[11] = (gp->svrip >> 8) & 0x0ff;
-	vopt->val[12] = (gp->svrip >> 16) & 0x0ff;
-	vopt->val[13] = gp->svrip >> 24;
-
-	vopt->len = 14;
+	vopt->len = 7;
 	vlen += sizeof(struct dhcp_option) + vopt->len;
 
 	vopt = dhcp_option_next(vopt);

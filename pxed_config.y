@@ -30,13 +30,13 @@ static int file_ok(const char *filename);
 
 
 %token <intval> NUMBER
-%token <strval>	PATH
 %token <strval>	WORD
 %token <strval>	PHRASE
+%token <strval>	PATH
 %token <strval>	DIRECT
 
-%token	BOOT_FILE DESC TFTP_ROOT TMOUT PROMPT
-%token	TX86_64_EFI TX86_BIOS TIA64_EFI
+%token	TX86_64_EFI TX86_BIOS TIA64_EFI BOOT_FILE DESC
+%token  TFTP_ROOT TMOUT PROMPT
 
 %%
 
