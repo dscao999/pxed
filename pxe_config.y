@@ -32,9 +32,10 @@ static int file_ok(const char *filename);
 %token <intval> NUMBER
 %token <strval>	PATH
 %token <strval>	WORD
-%token <strval>	PHASE
+%token <strval>	PHRASE
+%token <strval>	DIRECT
 
-%token	BOOT_FILE DESC TFTP_ROOT TMOUT PROMPT PHRASE
+%token	BOOT_FILE DESC TFTP_ROOT TMOUT PROMPT SVRTYP
 %token	TX86_64_EFI TX86_BIOS TIA64_EFI
 
 %%
@@ -48,8 +49,8 @@ specs:	/* empty */
 spec:	tftp_root 
 	| timeout 
 	| prompt 
+	| server_type
 	| bspec  {
-		fprintf(stderr, "Complete a boot line\n");
 		if(file_ok(bopt->bitems[noboot].bootfile)) {
 			noboot++;
 		} else {
@@ -69,20 +70,17 @@ bitem:	TX86_64_EFI {b_opt.bitems[noboot].clarch = X86_64_EFI;}
 	| BOOT_FILE '=' PATH {strncpy(b_opt.bitems[noboot].bootfile, $3, MAX_PATH);}
 	| BOOT_FILE '=' WORD {strncpy(b_opt.bitems[noboot].bootfile, $3, MAX_PATH);}
 	| DESC '=' WORD {strncpy(b_opt.bitems[noboot].desc, $3, MAX_PHRASE);}
-	| DESC '=' PHASE {strncpy(b_opt.bitems[noboot].desc, $3, MAX_PHRASE);}
+	| DESC '=' PHRASE {strncpy(b_opt.bitems[noboot].desc, $3, MAX_PHRASE);}
 	;
 
-tftp_root: TFTP_ROOT '=' PATH {strncpy(tftp_root, $3, sizeof(tftp_root));
-	                        fprintf(stderr, "TFTP ROOT, path: %s\n", tftp_root);}
-	| TFTP_ROOT '=' WORD {strncpy(tftp_root, $3, sizeof(tftp_root));
-				fprintf(stderr, "TFTP ROOT, word: %s\n", tftp_root);}
+server_type: SVRTYP '=' NUMBER {b_opt.svrtyp = $3;}
+tftp_root: TFTP_ROOT '=' DIRECT {strncpy(tftp_root, $3, sizeof(tftp_root));}
 	;
 
-timeout: TMOUT '=' NUMBER {b_opt.timeout = $3;
-			fprintf(stderr, "Timeout set to: %d\n", $3);}
+timeout: TMOUT '=' NUMBER {b_opt.timeout = $3;}
 	;
 
-prompt:	PROMPT '=' PHASE {strncpy(b_opt.prompt, $3, sizeof(b_opt.prompt));}
+prompt:	PROMPT '=' PHRASE {strncpy(b_opt.prompt, $3, sizeof(b_opt.prompt));}
 	| PROMPT '=' WORD {strncpy(b_opt.prompt, $3, sizeof(b_opt.prompt));}
 	;
 %%
@@ -118,6 +116,7 @@ static int file_ok(const char *filename)
 	retv = 1;
 
 exit_10:
+       retv = 1;
 	return retv;
 }
 
@@ -126,8 +125,10 @@ extern int yyparse(void);
 
 int pxed_config(const char *confname)
 {
-	int retc;
+	int retc, i;
+	const struct boot_item *btm;
 
+	b_opt.svrtyp = 0x3001;
 	bopt = &b_opt;
 	yyin = fopen(confname, "rb");
 	if (unlikely(!yyin)) {
@@ -143,6 +144,15 @@ int pxed_config(const char *confname)
 	fclose(yyin);
 	printf("TFTP Root: %s\n", tftp_root);
 	printf("Timeout: %d\n", bopt->timeout);
+	printf("Prompt: %s\n", bopt->prompt);
+	printf("Boot Server Type: %04hX\n", bopt->svrtyp);
+	printf("Number boot items: %d\n", noboot);
+	for (i = 0, btm = bopt->bitems; i < noboot; i++, btm++) {
+		printf("Boot Item: %d:\n", i);
+		printf("\tClient Type: %d\n", (int)btm->clarch);
+		printf("\tDescription: %s\n", btm->desc);
+		printf("\tBoot File: %s\n", btm->bootfile);
+	}
 	return 0;
 }
 
