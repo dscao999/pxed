@@ -1,14 +1,16 @@
 %{
 #include "pxe_config.tab.h"
+
+int lineno = 1;
 %}
 
 %option  noyywrap
-NAME	[:alpha:][[:alnum:]\-_.]*
+NAME	[a-zA-Z][a-zA-Z0-9_.\-]*
 %%
 
 #.*$		;
 [ \t]+		;
-\n		{return '\n';}
+\n		{lineno++; fprintf(stderr, "at line: %d\n", lineno);}
 =		{return '=';}
 tftp[ \t]+root	{return TFTP_ROOT;}
 timeout		{return TMOUT;}
@@ -18,6 +20,7 @@ X86_64_EFI	{return TX86_64_EFI;}
 IA64_EFI	{return TIA64_EFI;}
 bootfile	{return BOOT_FILE;}
 desc		{return DESC;}
-{NAME}		{yylval.strval = yytext; printf("'at X': %s\n", yytext);return WORD; }
-\/{NAME}(\/{NAME})*\/? {yylval.strval = yytext; return PATH;}
+[0-9]+		{yylval.intval = atoi(yytext); return NUMBER;}
+{NAME}		{yylval.strval = yytext; return WORD;}
+"/"{NAME}        {yylval.strval = yytext; return PATH;}
 \"{NAME}([ \t]+{NAME})*\" {yytext[yyleng-1] = 0; yylval.strval = yytext+1; return PHRASE;}

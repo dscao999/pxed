@@ -12,6 +12,7 @@ static char tftp_root[64];
 static int config_err = 0;
 static struct boot_option b_opt;
 const struct boot_option *bopt;
+extern int lineno;
 }
 
 %union {
@@ -22,9 +23,9 @@ const struct boot_option *bopt;
 %code {
 extern int yylineno;
 extern char *yytext;
-extern int yylex(void);
+int yylex(void);
+int yyerror(const char *s);
 static int file_ok(const char *filename);
-extern int yyerror(const char *s);
 }
 
 
@@ -38,16 +39,17 @@ extern int yyerror(const char *s);
 
 %%
 
-input:	line
-	| input line
+specs:	/* empty */
+        | spec
+	| specs spec
 	;
 
 
-line:	'\n'
-	| tftp_root '\n'
-	| timeout '\n'
-	| prompt '\n'
-	| specs '\n' {
+spec:	tftp_root 
+	| timeout 
+	| prompt 
+	| bspec  {
+		fprintf(stderr, "Complete a boot line\n");
 		if(file_ok(bopt->bitems[noboot].bootfile)) {
 			noboot++;
 		} else {
@@ -58,11 +60,10 @@ line:	'\n'
 	}
 	;
 
-specs:	spec 
-	| specs spec
+bspec:	bitem bitem bitem
 	;
 
-spec:	TX86_64_EFI {b_opt.bitems[noboot].clarch = X86_64_EFI;}
+bitem:	TX86_64_EFI {b_opt.bitems[noboot].clarch = X86_64_EFI;}
 	| TX86_BIOS {b_opt.bitems[noboot].clarch = X86_BIOS;}
 	| TIA64_EFI {b_opt.bitems[noboot].clarch = IA64_EFI;}
 	| BOOT_FILE '=' PATH {strncpy(b_opt.bitems[noboot].bootfile, $3, MAX_PATH);}
@@ -71,11 +72,14 @@ spec:	TX86_64_EFI {b_opt.bitems[noboot].clarch = X86_64_EFI;}
 	| DESC '=' PHASE {strncpy(b_opt.bitems[noboot].desc, $3, MAX_PHRASE);}
 	;
 
-tftp_root: TFTP_ROOT '=' PATH {strncpy(tftp_root, $3, sizeof(tftp_root)); fprintf(stderr, "At tftp root path\n");}
-	| TFTP_ROOT '=' WORD {strncpy(tftp_root, $3, sizeof(tftp_root)); fprintf(stderr, "at tftp root word %s\n", $3);}
+tftp_root: TFTP_ROOT '=' PATH {strncpy(tftp_root, $3, sizeof(tftp_root));
+	                        fprintf(stderr, "TFTP ROOT, path: %s\n", tftp_root);}
+	| TFTP_ROOT '=' WORD {strncpy(tftp_root, $3, sizeof(tftp_root));
+				fprintf(stderr, "TFTP ROOT, word: %s\n", tftp_root);}
 	;
 
-timeout: TMOUT '=' NUMBER {b_opt.timeout = $3;}
+timeout: TMOUT '=' NUMBER {b_opt.timeout = $3;
+			fprintf(stderr, "Timeout set to: %d\n", $3);}
 	;
 
 prompt:	PROMPT '=' PHASE {strncpy(b_opt.prompt, $3, sizeof(b_opt.prompt));}
@@ -117,12 +121,6 @@ exit_10:
 	return retv;
 }
 
-int yyerror(const char *msg)
-{
-        logmsg(LERR, "%d: %s at %s\n", yylineno, msg, yytext);
-        return 0;
-}
-
 extern FILE *yyin;
 extern int yyparse(void);
 
@@ -139,9 +137,19 @@ int pxed_config(const char *confname)
 	}
 	retc = yyparse();
 	if (retc) {
-		yyerror("WHERE? ");
 		logmsg(LERR, "Configuration File Error: %d\n", retc);
 		return -2;
 	}
+	fclose(yyin);
+	printf("TFTP Root: %s\n", tftp_root);
+	printf("Timeout: %d\n", bopt->timeout);
 	return 0;
+}
+
+int yyerror(const char *s)
+{
+	int retv;
+
+	retv = fprintf(stderr, "Line: %d: %s\n", lineno, yytext);
+	return retv;
 }
