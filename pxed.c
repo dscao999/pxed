@@ -16,6 +16,7 @@
 #include <net/if.h>
 #include "miscs.h"
 #include "dhcp.h"
+#include "pxed_config.h"
 
 static volatile int global_exit = 0;
 
@@ -128,10 +129,11 @@ exit_10:
 }
 
 static int makeup_vendor_pxe(struct dhcp_option *opt, int lenrem,
-		const struct g_param *gp)
+		const struct g_param *gp, int clarch)
 {
-	int vlen, idx;
+	int vlen, idx, i;
 	struct dhcp_option *vopt;
+	const struct boot_item *bitem;
 
 	opt->code = DHCP_VENDOR;
 	vopt = (struct dhcp_option *)opt->val;
@@ -144,35 +146,47 @@ static int makeup_vendor_pxe(struct dhcp_option *opt, int lenrem,
 
 	vopt = dhcp_option_next(vopt);
 	vopt->code = PXE_BOOTSVR;
-	vopt->val[0] = b_opt->svrtyp >> 8;
-	vopt->val[1] = b_opt->svrtyp & 0x0ff;
-	vopt->val[2] = 1;
-	vopt->val[3] = gp->svrip & 0x0ff;
-	vopt->val[4] = (gp->svrip >> 8) & 0x0ff;
-	vopt->val[5] = (gp->svrip >> 16) & 0x0ff;
-	vopt->val[6] = gp->svrip >> 24;
-	vopt->len = 7;
+	idx = 0;
+	for (i = 0, bitem = bopt->bitems; i < bopt->n_bitems; i++, bitem++) {
+		if (bitem->clarch != (unsigned int)clarch)
+			continue;
+		vopt->val[idx+0] = bitem->svrtyp >> 8;
+		vopt->val[idx+1] = bitem->svrtyp & 0x0ff;
+		vopt->val[idx+2] = 1;
+		vopt->val[idx+3] = gp->svrip & 0x0ff;
+		vopt->val[idx+4] = (gp->svrip >> 8) & 0x0ff;
+		vopt->val[idx+5] = (gp->svrip >> 16) & 0x0ff;
+		vopt->val[idx+6] = gp->svrip >> 24;
+		idx += 7;
+	}
+	if (idx == 0) {
+		logmsg(LINFO, "Client Archtecture: %04X not supported.\n",
+				clarch);
+		return 0;
+	}
+	vopt->len = idx;
 	vlen += sizeof(struct dhcp_option) + vopt->len;
 
 	vopt = dhcp_option_next(vopt);
 	vopt->code = PXE_BOOTMENU;
-	vopt->val[0] = 0x30;
-	vopt->val[1] = 1;
-	vopt->val[2] = strlen(PXE_PROMPT1) + 1;
-	strcpy((char *)(vopt->val+3), PXE_PROMPT1);
-	idx = strlen(PXE_PROMPT1) + 4;
-	vopt->val[idx] = 0x30;
-	vopt->val[idx+1] = 2;
-	vopt->val[idx+2] = strlen(PXE_PROMPT2) + 1;
-	strcpy((char *)(vopt->val+idx+3), PXE_PROMPT2);
-	vopt->len = idx + strlen(PXE_PROMPT2) + 4;
+	idx = 0;
+	for (i = 0, bitem = bopt->bitems; i < bopt->n_bitems; i++, bitem++) {
+		if (bitem->clarch != (unsigned short)clarch)
+			continue;
+		vopt->val[idx+0] = bitem->svrtyp >> 8;
+		vopt->val[idx+1] = bitem->svrtyp & 0x0ff;
+		vopt->val[idx+2] = strlen(bitem->desc) + 1;
+		strcpy((char *)(vopt->val+idx+3), bitem->desc);
+		idx += vopt->val[idx+2] + 3;
+	}
+	vopt->len = idx;
 	vlen += sizeof(struct dhcp_option) + vopt->len;
 
 	vopt = dhcp_option_next(vopt);
 	vopt->code = PXE_BOOTPROMPT;
-	vopt->val[0] = 50;
-	strcpy((char *)(vopt->val+1), PXE_PROMPT);
-	vopt->len = strlen(PXE_PROMPT) + 2;
+	vopt->val[0] = bopt->timeout;
+	strcpy((char *)(vopt->val+1), bopt->prompt);
+	vopt->len = strlen(bopt->prompt) + 2;
 	vlen += sizeof(struct dhcp_option) + vopt->len;
 
 	vopt = dhcp_option_next(vopt);
@@ -184,8 +198,6 @@ static int makeup_vendor_pxe(struct dhcp_option *opt, int lenrem,
 }
 
 static const char pxetag[] = "PXEClient";
-static const char bootfile1[] = "/debian/pxelinux.0";
-static const char bootfile2[] = "/debian/bootnetx64.efi";
 
 static int make_pxe_ack(int sockd, struct dhcp_data *dhdat,
 		struct sockaddr_in *peer, const struct dhcp_option *vopt,
@@ -194,20 +206,19 @@ static int make_pxe_ack(int sockd, struct dhcp_data *dhdat,
 	struct dhcp_packet *dhcp;
 	const struct dhcp_option *c_opt;
 	struct dhcp_option *opt, *venopt;
-	int btype, layer, optlen, len;
+	int btype, layer, optlen, len, i;
 	unsigned char uuid[17];
+	const struct boot_item *bitem;
 
 	c_opt = dhcp_option_search(dhdat, DHCP_SVRID);
 	if (c_opt && memcmp(c_opt->val, &gp->svrip, 4) != 0)
 		return 0;
 
-	c_opt = dhcp_option_search(dhdat, DHCP_CUUID);
-	if (!c_opt)
-		c_opt = dhcp_option_search(dhdat, DHCP_CMUID);
-	memset(uuid, 0, sizeof(uuid));
-	if (unlikely(!c_opt))
+	c_opt = dhcp_option_search(dhdat, DHCP_CMUID);
+	if (unlikely(!c_opt)) {
 		logmsg(LERR, "No UUID Info in DHCP PXE request.");
-	else {
+		memset(uuid, 0, sizeof(uuid));
+	} else {
 		assert(c_opt->len == 17);
 		memcpy(uuid, c_opt->val, c_opt->len);
 	}
@@ -219,7 +230,15 @@ static int make_pxe_ack(int sockd, struct dhcp_data *dhdat,
 		logmsg(LWARN, "Secure Boot not supported now.");
 		return 0;
 	}
-
+	for (bitem = bopt->bitems, i = 0; i < bopt->n_bitems; i++, bitem++) {
+		if (bitem->svrtyp == btype)
+			break;
+	}
+	if (i == bopt->n_bitems) {
+		logmsg(LINFO, "No such boot file type: %04X\n", btype);
+		return 0;
+	}
+	
 	dhcp = &dhdat->dhpkt;
 	dhcp->header.op = DHCP_REP;
 	dhcp->header.secs = 0;
@@ -230,14 +249,7 @@ static int make_pxe_ack(int sockd, struct dhcp_data *dhdat,
 	snprintf(dhcp->header.sname, sizeof(dhcp->header.sname), "%u.%u.%u.%u",
 			gp->svrip & 0x0ff, (gp->svrip >> 8) & 0x0ff,
 			(gp->svrip >> 16) & 0x0ff, (gp->svrip >> 24));
-	if (btype == 0x3001)
-		strcpy(dhcp->header.bootfile, bootfile1);
-	else if (btype == 0x3002)
-		strcpy(dhcp->header.bootfile, bootfile2);
-	else {
-		logmsg(LERR, "Invalid type of boot file.");
-		return 0;
-	}
+	strcpy(dhcp->header.bootfile, bitem->bootfile);
 
 	optlen = 0;
 	opt = dhcp->options;
@@ -303,7 +315,7 @@ static int make_pxe_offer(int sockd, struct dhcp_data *dhdat,
 	struct dhcp_packet *dhcp;
 	struct dhcp_option *opt;
 	const struct dhcp_option *c_opt;
-	int optlen = 0, maxlen = 1024, lenrem, len;
+	int optlen = 0, maxlen, lenrem, len;
 	unsigned short clarch;
 	unsigned char uuid[17];
 	char ip[64];
@@ -324,7 +336,7 @@ static int make_pxe_offer(int sockd, struct dhcp_data *dhdat,
 		logmsg(LERR, "PXE DHCP discover has no client arch option.");
 		return 0;
 	} else {
-		clarch = (c_opt->val[0] << 8) | copt->val[1];
+		clarch = (c_opt->val[0] << 8) | c_opt->val[1];
 	}
 	c_opt = dhcp_option_search(dhdat, DHCP_MAXLEN);
 	if (unlikely(!c_opt)) {
@@ -373,7 +385,8 @@ static int make_pxe_offer(int sockd, struct dhcp_data *dhdat,
 
 	lenrem = maxlen - sizeof(struct dhcp_head) - optlen;
 	opt = dhcp_option_next(opt);
-	makeup_vendor_pxe(opt, lenrem, gp);
+	if (makeup_vendor_pxe(opt, lenrem, gp, clarch) == 0)
+		return 0;
 	optlen += sizeof(struct dhcp_option) + opt->len;
 
 	opt = dhcp_option_next(opt);
@@ -440,7 +453,7 @@ static int packet_process(int sockd, struct dhcp_data *dhdat,
 		logmsg(LERR, "No DHCP Message type specified.");
 	else if (opt->val[0] == DHCP_DISCOVER) {
 		len = make_pxe_offer(sockd, dhdat, &srcaddr, gp);
-		if (gp->verbose)
+		if (len > 0 && gp->verbose)
 			dhcp_echo_packet(dhdat);
 	} else if (opt->val[0] == DHCP_REQUEST) {
 		opt = dhcp_option_search(dhdat, DHCP_VENDOR);
@@ -514,7 +527,11 @@ int main(int argc, char *argv[])
 	static struct g_param gp;
 
 	gparam_init(argc, argv, &gp);
-	miscs_init(gp->logfile);
+	retv = pxed_config(gp.conf);
+	if (retv < 0)
+		return -retv;
+
+	miscs_init(gp.logfile);
 	if (svrip_init(&gp))
 		return 1;
 	logmsg(LINFO, "Listening on %u.%u.%u.%u, dev: %s",

@@ -19,7 +19,7 @@ conftx: conf_test.o  pxed_config.tab.o lex.yy.o miscs.o
 pxem:	pxe_monitor.o dhcp.o miscs.o
 	$(LINK.o) $^ -o $@
 
-pxed:	pxed.o dhcp.o miscs.o
+pxed:	pxed.o dhcp.o miscs.o pxed_config.tab.o lex.yy.o
 	$(LINK.o) $^ -o $@
 
 retv:	retrieve.o dhcp.o

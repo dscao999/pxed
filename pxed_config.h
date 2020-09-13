@@ -28,6 +28,7 @@ struct boot_item {
 struct boot_option {
 	unsigned int bvip;
         unsigned short timeout;
+	unsigned short n_bitems;
         char prompt[MAX_PHRASE];
 	struct boot_item bitems[MAX_NUM_ITEMS];
 };

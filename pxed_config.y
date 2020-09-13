@@ -35,7 +35,9 @@ static int file_ok(const char *filename);
 %token <strval>	PATH
 %token <strval>	DIRECT
 
-%token	TX86_64_EFI TX86_BIOS TIA64_EFI BOOT_FILE DESC
+%token	TX86_64_EFI TX86_BIOS TIA64_EFI
+%token	DESC
+%token	BOOT_FILE
 %token  TFTP_ROOT TMOUT PROMPT
 
 %%
@@ -54,8 +56,9 @@ spec:	tftp_root
 			b_opt.bitems[noboot].svrtyp = 0x3001 + noboot;
 			noboot++;
 		} else {
-			logmsg(LERR, "An Invalid File Specification: %s\n",
-				b_opt.bitems[noboot].bootfile);
+			logmsg(LERR, "An Invalid File Boot Specification: %s," \
+					" ignored.\n",
+					b_opt.bitems[noboot].bootfile);
 			config_err = 1;
 		}
 	}
@@ -140,6 +143,8 @@ int pxed_config(const char *confname)
 		return -2;
 	}
 	fclose(yyin);
+
+	b_opt.n_bitems = noboot;
 	printf("TFTP Root: %s\n", tftp_root);
 	printf("Timeout: %d\n", bopt->timeout);
 	printf("Prompt: %s\n", bopt->prompt);
