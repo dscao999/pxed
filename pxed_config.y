@@ -36,9 +36,8 @@ static int file_ok(const char *filename);
 %token <strval>	DIRECT
 
 %token	TX86_64_EFI TX86_BIOS TIA64_EFI
-%token	DESC
-%token	BOOT_FILE
-%token  TFTP_ROOT TMOUT PROMPT
+%left	DESC BOOT_FILE TFTP_ROOT TMOUT PROMPT
+%nonassoc	SETTO
 
 %%
 
@@ -70,20 +69,20 @@ bspec:	bitem bitem bitem
 bitem:	TX86_64_EFI {b_opt.bitems[noboot].clarch = X86_64_EFI;}
 	| TX86_BIOS {b_opt.bitems[noboot].clarch = X86_BIOS;}
 	| TIA64_EFI {b_opt.bitems[noboot].clarch = IA64_EFI;}
-	| BOOT_FILE '=' PATH {strncpy(b_opt.bitems[noboot].bootfile, $3, MAX_PATH);}
-	| BOOT_FILE '=' WORD {strncpy(b_opt.bitems[noboot].bootfile, $3, MAX_PATH);}
-	| DESC '=' WORD {strncpy(b_opt.bitems[noboot].desc, $3, MAX_PHRASE);}
-	| DESC '=' PHRASE {strncpy(b_opt.bitems[noboot].desc, $3, MAX_PHRASE);}
+	| BOOT_FILE SETTO PATH {strncpy(b_opt.bitems[noboot].bootfile, $3, MAX_PATH);}
+	| BOOT_FILE SETTO WORD {strncpy(b_opt.bitems[noboot].bootfile, $3, MAX_PATH);}
+	| DESC SETTO WORD {strncpy(b_opt.bitems[noboot].desc, $3, MAX_PHRASE);}
+	| DESC SETTO PHRASE {strncpy(b_opt.bitems[noboot].desc, $3, MAX_PHRASE);}
 	;
 
-tftp_root: TFTP_ROOT '=' DIRECT {strncpy(tftp_root, $3, sizeof(tftp_root));}
+tftp_root: TFTP_ROOT SETTO DIRECT {strncpy(tftp_root, $3, sizeof(tftp_root));}
 	;
 
-timeout: TMOUT '=' NUMBER {b_opt.timeout = $3;}
+timeout: TMOUT SETTO NUMBER {b_opt.timeout = $3;}
 	;
 
-prompt:	PROMPT '=' PHRASE {strncpy(b_opt.prompt, $3, sizeof(b_opt.prompt));}
-	| PROMPT '=' WORD {strncpy(b_opt.prompt, $3, sizeof(b_opt.prompt));}
+prompt:	PROMPT SETTO PHRASE {strncpy(b_opt.prompt, $3, sizeof(b_opt.prompt));}
+	| PROMPT SETTO WORD {strncpy(b_opt.prompt, $3, sizeof(b_opt.prompt));}
 	;
 %%
 

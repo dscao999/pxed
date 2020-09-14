@@ -37,11 +37,16 @@ int miscs_init(const char *logfile)
 {
 	int retv = 0;
 
-	ilog = fopen(logfile, "ab");
-	if (!ilog) {
-		retv = 1;
-		logmsg(LERR, "Cannot open log file \"%s\": %s\n", logfile,
-				strerror(errno));
+	if (!logfile)
+		ilog = stdout;
+	else {
+		ilog = fopen(logfile, "ab");
+		if (!ilog) {
+			retv = 1;
+			logmsg(LERR, "Cannot open log file \"%s\": %s\n", logfile,
+					strerror(errno));
+			ilog = stdout;
+		}
 	}
 	return retv;
 }

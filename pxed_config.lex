@@ -11,7 +11,7 @@ NAME	[a-zA-Z][a-zA-Z0-9_.\-]*
 #.*$		;
 [ \t]+		;
 \n		{lineno++;}
-=		{return '=';}
+=		{return SETTO;}
 tftp[ \t]+root	{return TFTP_ROOT;}
 timeout		{return TMOUT;}
 prompt		{return PROMPT;}
