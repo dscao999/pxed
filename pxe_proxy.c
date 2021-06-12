@@ -150,7 +150,7 @@ static int check_packet(int sockd, const struct sockaddr_in *src,
 	mopt = dhcp_option_next(mopt);
 	mopt->code = DHCP_SVRID;
 	mopt->len = 4;
-	retv = inet_pton(AF_INET, "192.168.97.104", &svraddr);
+	retv = inet_pton(AF_INET, "192.168.98.9", &svraddr);
 	if (retv != 1)
 		elog("Warning: inet_pton failed.\n");
 	memcpy(mopt->val, &svraddr, mopt->len);
@@ -175,8 +175,8 @@ static int check_packet(int sockd, const struct sockaddr_in *src,
 	sopt = dhcp_option_next(sopt);
 	sopt->code = PXE_BOOTSVR;
 	sublen = 0;
-	sopt->val[0] = 0;
-	sopt->val[1] = 1;
+	sopt->val[0] = 0x0;
+	sopt->val[1] = 0x1;
 	sopt->val[2] = 1;
 	memcpy(sopt->val+3, &svraddr, 4);
 	sublen += 7;
@@ -226,6 +226,7 @@ static int packet_process(int sockd, struct dhcp_data *dhdat, FILE *fout)
 	struct sockaddr_in srcaddr;
 	socklen_t socklen;
 	char *buf = (char *)&dhdat->pkt;
+	const struct dhcp_option *copt;
 
 	dhdat->len = 0;
 	socklen = sizeof(srcaddr);
@@ -238,7 +239,12 @@ static int packet_process(int sockd, struct dhcp_data *dhdat, FILE *fout)
 	}
 	dhdat->len = len;
 	if (!dhcp_pxe(dhdat)) {
-		elog("Not a PXE discovery, Ignored");
+		elog("Not a PXE discover packet, Ignored.\n");
+		return 0;
+	}
+	copt = dhcp_option_search(dhdat, DHCP_MSGTYPE);
+	if (!copt || copt->val[0] != DHCP_DISCOVER) {
+		elog("Not a DHCP discover request, Ignored.\n");
 		return 0;
 	}
 
@@ -304,7 +310,6 @@ int main(int argc, char *argv[])
 		if (pfd.revents) {
 			sockd = pfd.fd;
 			pfd.revents = 0;
-			elog("Receive a DHCP message at port 67.");
 			packet_process(sockd, dhdat, NULL);
 		}
 	} while (global_exit == 0);
