@@ -4,17 +4,18 @@
 #include <errno.h>
 #include <assert.h>
 #include <stdlib.h>
-#include "miscs.h"
+#include <stdarg.h>
+#include <time.h>
 #include "dhcp.h"
 
-static const uint8 dhcp_cookie[] = {99, 130, 83, 99};
+static const uint8_t dhcp_cookie[] = {99, 130, 83, 99};
 static const char PXE_ID[] = "PXEClient";
 
 int dhcp_valid(const struct dhcp_data *dhdat)
 {
 	if (dhdat->len < sizeof(struct dhcp_packet))
 		return 0;
-	return memcmp(dhdat->dhpkt.header.magic_cookie, dhcp_cookie, 4) == 0;
+	return memcmp(dhdat->pkt.header.magic_cookie, dhcp_cookie, 4) == 0;
 }
 
 int dhcp_pxe(const struct dhcp_data *dhdat)
@@ -22,6 +23,10 @@ int dhcp_pxe(const struct dhcp_data *dhdat)
 	const struct dhcp_option *cls;
 	int retv = 0;
 
+	retv = dhcp_valid(dhdat);
+	if (!retv)
+		return retv;
+	retv = 0;
 	cls = dhcp_option_search(dhdat, DHCP_CLASS);
 	if (cls && cls->len == 32)
 		retv = memcmp(cls->val, PXE_ID, sizeof(PXE_ID) - 1) == 0;
@@ -32,20 +37,31 @@ const struct dhcp_option *
 dhcp_option_search(const struct dhcp_data *dhdat, int opt)
 {
 	const struct dhcp_option *option;;
-	const struct dhcp_packet *dhpkt = &dhdat->dhpkt;
+	const struct dhcp_packet *pkt = &dhdat->pkt;
 	int len = dhdat->len;
 
-	option = dhdat->dhpkt.options;
+	option = dhdat->pkt.options;
 	do {
 		if (option->code == opt)
 			break;
 		option = dhcp_option_cnext(option);
-	} while (option != NULL && ((void *)option - (void *)dhpkt) < len);
-	if (option && ((void *)option - (void *)dhpkt) >= len)
+	} while (option != NULL && ((char *)option - (char *)pkt) < len);
+	if (option && ((char *)option - (char *)pkt) >= len)
 		option = NULL;
 
 	return option;
 } 
+
+static int llog(const char *format, ...)
+{
+	va_list ap;
+	int len;
+
+	va_start(ap, format);
+	len = vprintf(format, ap);
+	va_end(ap);
+	return len;
+}
 
 static inline void dhcp_echo_ip(const unsigned int ip)
 {
@@ -53,10 +69,10 @@ static inline void dhcp_echo_ip(const unsigned int ip)
 			(ip >> 16) & 0x0ff, (ip >> 24) & 0x0ff);
 }
 
-static inline void dhcp_echo_chaddr(const uint8 chaddr[16])
+static inline void dhcp_echo_chaddr(const uint8_t chaddr[16])
 {
 	int i;
-	const uint8 *ch;
+	const uint8_t *ch;
 
 	llog("DHCP chaddr:");
 	for (i = 0, ch = chaddr; i < 16; i++, ch++)
@@ -69,9 +85,9 @@ static int dhcp_echo_head(const struct dhcp_packet *dhpkt)
 	const struct dhcp_head *hdr = &dhpkt->header;
 
 	if (hdr->op == DHCP_REQ)
-		llog("Boot Request Packet:\n");
+		llog("A Boot Request Packet.\n");
 	else if (hdr->op == DHCP_REP)
-		llog("Boot Reply Packet:\n");
+		llog("A Boot Reply Packet.\n");
 	llog("OP: %02hhX HType: %02hhX HLen: 3%hhd Hoops: %2hhd\n",
 			hdr->op, hdr->htype, hdr->hlen, hdr->hops);
 	llog("XID: %08X\n", hdr->xid);
@@ -96,25 +112,29 @@ static int dhcp_echo_head(const struct dhcp_packet *dhpkt)
 	return sizeof(struct dhcp_head);
 }
 
-static inline char *dhcp_opt2str(const unsigned char *str, int len)
+static inline int dhcp_opt2str(char *buf, int maxlen,
+		const uint8_t *str, int len)
 {
-	char *buf;
+	int mlen;
 
-	buf = malloc(len + 1);
-	memcpy(buf, str, len);
-	*(buf+len) = 0;
-	return buf;
+	mlen = maxlen - 1 < len ? maxlen - 1 : len;
+	memcpy(buf, str, mlen);
+	*(buf+mlen) = 0;
+	return mlen;
 }
 
-static int echo_pxe_option(const struct dhcp_option *opt)
+static int dhcp_echo_pxe_option(const struct dhcp_option *opt)
 {
-	int len, i, idx, numips, bid, desclen;
+	int len, i, idx, numips, bid, desclen, maxlen;
 	char *buf;
 
+	maxlen = 128;
+	buf = malloc(maxlen);
 	len = 0;
 	switch(opt->code) {
 	case PXE_END:
 		llog("PXE Option Ends(%hhu).\n", opt->code);
+		break;
 	case DHCP_PAD:
 		len = 1;
 		break;
@@ -148,17 +168,15 @@ static int echo_pxe_option(const struct dhcp_option *opt)
 			llog("\t\tBoot ID: %04X", bid);
 			idx += 2;
 			desclen = opt->val[idx];
-			buf = dhcp_opt2str(opt->val+idx+1, desclen);
+			maxlen = dhcp_opt2str(buf, maxlen, opt->val+idx+1, desclen);
 			llog(" Menu: %s\n", buf);
-			free(buf);
 			idx += desclen + 1;
 		} while (idx < opt->len);
 		break;
 	case PXE_BOOTPROMPT:
 		llog("PXE Boot Prompt, Timeout: %hhd", opt->val[0]);
-		buf = dhcp_opt2str(opt->val+1, opt->len - 1);
+		maxlen = dhcp_opt2str(buf, maxlen, opt->val+1, opt->len - 1);
 		llog(" Prompt: %s\n", buf);
-		free(buf);
 		break;
 	default:
 		llog("Option: %u, Length: %u, Vals:", opt->code,
@@ -171,18 +189,19 @@ static int echo_pxe_option(const struct dhcp_option *opt)
 
 	if (len == 0)
 		len = opt->len + sizeof(struct dhcp_option);
+	free(buf);
 	return len;
 }
 
-static int dhcp_echo_option(const struct dhcp_option *opt, int vendor)
+static int dhcp_echo_option(const struct dhcp_option *opt)
 {
-	int len, venlen, i;
+	int len, venlen, i, maxlen;
 	char *buf;
-	unsigned short arch;
+	unsigned int arch;
 	const struct dhcp_option *inn;
 
-	if (vendor)
-		return echo_pxe_option(opt);
+	maxlen = 128;
+	buf = malloc(maxlen);
 
 	len = 0;
 	switch(opt->code) {
@@ -195,9 +214,8 @@ static int dhcp_echo_option(const struct dhcp_option *opt, int vendor)
 				opt->val[1], opt->val[2], opt->val[3]);
 		break;
 	case DHCP_CLNAME:
-		buf = dhcp_opt2str(opt->val, opt->len);
+		maxlen = dhcp_opt2str(buf, maxlen, opt->val, opt->len);
 		llog("Client Host Name: %s\n", buf);
-		free(buf);
 		break;
 	case DHCP_VENDOR:
 		inn = (const struct dhcp_option *)opt->val;
@@ -205,7 +223,7 @@ static int dhcp_echo_option(const struct dhcp_option *opt, int vendor)
 		venlen = 0;
 		while (inn) {
 			llog("\t");
-			venlen += dhcp_echo_option(inn, 1);
+			venlen += dhcp_echo_pxe_option(inn);
 			inn = dhcp_option_cnext(inn);
 		}
 		assert(opt->len == venlen);
@@ -257,9 +275,8 @@ static int dhcp_echo_option(const struct dhcp_option *opt, int vendor)
 				(int)((opt->val[0] << 8) | opt->val[1]));
 		break;
 	case DHCP_CLASS:
-		buf = dhcp_opt2str(opt->val, opt->len);
+		maxlen = dhcp_opt2str(buf, maxlen, opt->val, opt->len);
 		llog("Class ID: %s\n", buf);
-		free(buf);
 		break;
 	case DHCP_CMUID:
 	case DHCP_CUUID:
@@ -285,6 +302,7 @@ static int dhcp_echo_option(const struct dhcp_option *opt, int vendor)
 		llog("\n");
 		break;
 	}
+	free(buf);
 	if (len == 0)
 		len = opt->len + sizeof(struct dhcp_option);
 	return len;
@@ -297,10 +315,10 @@ int dhcp_echo_packet(const struct dhcp_data *dhdat)
 	struct timespec ctm;
 	int len;
 
-	dhcp = &dhdat->dhpkt;
+	dhcp = &dhdat->pkt;
 	clock_gettime(CLOCK_MONOTONIC_COARSE, &ctm);
-	llog("Time Stamp:%09lu.%03lu", ctm.tv_sec, ctm.tv_nsec / 1000000);
-	llog("====================================================\n");
+	llog("======================Time Stamp:%09lu.%03lu", ctm.tv_sec, ctm.tv_nsec / 1000000);
+	llog("======================\n");
 	if (!dhcp_valid(dhdat)) {
 		printf("Not a valid DHCP packet!\n");
 		return dhdat->len;
@@ -311,7 +329,7 @@ int dhcp_echo_packet(const struct dhcp_data *dhdat)
 		return dhdat->len;
 	opt = dhcp->options;
 	while (opt) {
-		len += dhcp_echo_option(opt, 0);
+		len += dhcp_echo_option(opt);
 		opt = dhcp_option_cnext(opt);
 	}
 	return len;

@@ -1,5 +1,6 @@
 #ifndef DHCP_DSCAO__
 #define DHCP_DSCAO__
+#include <stdint.h>
 
 #define DHCP_REQ	1
 #define DHCP_REP	2
@@ -20,44 +21,39 @@ enum dhcp_code {DHCP_PAD = 0, DHCP_NETMASK = 1, DHCP_CLNAME = 12,
 enum pxe_code {PXE_DISCTL = 6, PXE_BOOTSVR = 8, PXE_BOOTMENU = 9,
 	PXE_BOOTPROMPT = 10, PXE_BOOTITEM = 71, PXE_END = 255};
 
-typedef unsigned char uint8;
-typedef unsigned short uint16;
-typedef unsigned int uint32;
-
 struct dhcp_head {
-	uint8 op;
-	uint8 htype;
-	uint8 hlen;
-	uint8 hops;
-	uint32 xid;
-	uint16 secs;
-	uint16 flags;
-	uint32 ciaddr;
-	uint32 yiaddr;
-	uint32 siaddr;
-	uint32 giaddr;
-	uint8 chaddr[16];
+	uint8_t op;
+	uint8_t htype;
+	uint8_t hlen;
+	uint8_t hops;
+	uint32_t xid;
+	uint16_t secs;
+	uint16_t flags;
+	uint32_t ciaddr;
+	uint32_t yiaddr;
+	uint32_t siaddr;
+	uint32_t giaddr;
+	uint8_t chaddr[16];
 	char sname[64];
 	char bootfile[128];
-	uint8 magic_cookie[4];
+	uint8_t magic_cookie[4];
 };
 
 struct __attribute__((aligned(1))) dhcp_option {
-	uint8 code;
-	uint8 len;
-	uint8 val[0];
+	uint8_t code;
+	uint8_t len;
+	uint8_t val[1];
 };
 
 struct __attribute__((aligned(8))) dhcp_packet {
 	struct dhcp_head header;
-	struct dhcp_option options[0];
+	struct dhcp_option options[1];
 };
 
 struct dhcp_data {
-	unsigned short len;
-	unsigned short maxlen;
-	unsigned short pad[2];
-	struct dhcp_packet dhpkt;
+	uint16_t len;
+	uint16_t maxlen;
+	struct dhcp_packet pkt;
 };
 
 int dhcp_valid(const struct dhcp_data *dhdat);
@@ -69,11 +65,12 @@ const struct dhcp_option *dhcp_option_cnext(const struct dhcp_option *option)
 	const struct dhcp_option *cnext = NULL;
 
 	if (option->code == DHCP_PAD)
-		cnext = (const void *)option + 1;
+		cnext = (const struct dhcp_option *)((const char *)option + 1);
 	else if (option->code == DHCP_END)
 		cnext = NULL;
 	else
-		cnext = (const void *)(option + 1) + option->len;
+		cnext = (const struct dhcp_option *)((const char *)(option + 1)
+				+ option->len - 1);
 	return cnext;
 }
 
@@ -83,11 +80,12 @@ struct dhcp_option *dhcp_option_next(struct dhcp_option *option)
 	struct dhcp_option *next = NULL;
 
 	if (option->code == DHCP_PAD)
-		next = (void *)option + 1;
+		next = (struct dhcp_option *)((char *)option + 1);
 	else if (option->code == DHCP_END)
 		next = NULL;
 	else
-		next = (void *)(option + 1) + option->len;
+		next = (struct dhcp_option *)((char *)(option + 1) +
+				option->len - 1);
 	return next;
 }
 

@@ -5,10 +5,11 @@ endif
 
 .PHONEY:	all clean release
 
-CFLAGS = -W -Wall -D_GNU_SOURCE -g
+CFLAGS = -pedantic -W -Wall -D_GNU_SOURCE -g
 LDFLAGS = -g
 
-all:	pxed retv pxem conftx
+#all:	pxed retv pxem conftx
+all:	pxem pxe_proxy
 
 srcs = $(wildcard *.c)
 deps = $(srcs:.c=.d)
@@ -17,6 +18,9 @@ conftx: conf_test.o  pxed_config.tab.o lex.yy.o miscs.o
 	$(LINK.o) $^ -o $@
 
 pxem:	pxe_monitor.o dhcp.o miscs.o
+	$(LINK.o) $^ -o $@
+
+pxe_proxy:	pxe_proxy.o dhcp.o
 	$(LINK.o) $^ -o $@
 
 pxed:	pxed.o dhcp.o miscs.o pxed_config.tab.o lex.yy.o
@@ -32,7 +36,7 @@ pxed_config.tab.c pxed_config.tab.h: pxed_config.y
 	bison -d -v pxed_config.y
 
 clean:
-	rm -f pxed conftx pxem retv *.o
+	rm -f pxed conftx pxem retv *.o pxe_proxy
 	rm -f pxed_config.tab.c lex.yy.c pxed_config.tab.h
 
 release:	CFLAGS += -DNDEBUG -O2

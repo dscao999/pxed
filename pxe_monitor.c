@@ -10,7 +10,7 @@
 #include <poll.h>
 #include <signal.h>
 #include <sched.h>
-#include "miscs.h"
+#include <stdarg.h>
 #include "dhcp.h"
 
 static volatile int global_exit = 0;
@@ -19,6 +19,17 @@ void sig_handler(int sig)
 {
 	if (sig == SIGINT || sig == SIGTERM)
 		global_exit = 1;
+}
+
+static int elog(const char *format, ...)
+{
+	va_list va;
+	int len;
+
+	va_start(va, format);
+	len = vfprintf(stderr, format, va);
+	va_end(va);
+	return len;
 }
 
 static int poll_init(struct pollfd *pfd, int port)
@@ -36,13 +47,13 @@ static int poll_init(struct pollfd *pfd, int port)
 	while ((retv = getaddrinfo(NULL, pstr, &hints, &res)) == EAI_AGAIN)
 		sched_yield();
 	if (retv != 0) {
-		logmsg(LERR, "getaddrinfo failed: %s\n", gai_strerror(retv));
+		elog("getaddrinfo failed: %s\n", gai_strerror(retv));
 		goto exit_10;
 	}
 
 	sockd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
 	if (sockd == -1) {
-		logmsg(LERR, "Cannot create socket: %s\n", strerror(errno));
+		elog("Cannot create socket: %s\n", strerror(errno));
 		retv = errno;
 		goto exit_20;
 	}
@@ -50,7 +61,7 @@ static int poll_init(struct pollfd *pfd, int port)
 	pfd->revents = 0;
 	pfd->events = POLLIN;
 	if (bind(sockd, res->ai_addr, res->ai_addrlen) == -1) {
-		logmsg(LERR, "Cannot bind socket: %s\n", strerror(errno));
+		elog("Cannot bind socket: %s\n", strerror(errno));
 		retv = errno;
 		goto exit_30;
 	}
@@ -70,7 +81,7 @@ static int packet_process(int sockd, struct dhcp_data *dhdat, FILE *fout)
 	int len, buflen = dhdat->maxlen;
 	struct sockaddr_in srcaddr;
 	socklen_t socklen;
-	char *buf = (char *)&dhdat->dhpkt;
+	char *buf = (char *)&dhdat->pkt;
 
 	dhdat->len = 0;
 	socklen = sizeof(srcaddr);
@@ -78,7 +89,7 @@ static int packet_process(int sockd, struct dhcp_data *dhdat, FILE *fout)
 	len = recvfrom(sockd, buf, buflen, 0, (struct sockaddr *)&srcaddr,
 			&socklen);
 	if (len <= 0) {
-		logmsg(LERR, "recvfrom failed: %s\n", strerror(errno));
+		elog("recvfrom failed: %s\n", strerror(errno));
 		return len;
 	}
 	if (fout)
@@ -102,12 +113,15 @@ int main(int argc, char *argv[])
 	sigact.sa_handler = sig_handler;
 	if (sigaction(SIGTERM, &sigact, NULL) == -1 ||
 			sigaction(SIGINT, &sigact, NULL) == -1)
-		logmsg(LERR, "Signal Handler Cannot be setup: %s\n",
+		elog("Signal Handler Cannot be setup: %s\n",
 				strerror(errno));
 
 	dhdat = malloc(2048);
-	check_pointer(dhdat);
-	dhdat->maxlen = 2048 - offsetof(struct dhcp_data, dhpkt);
+	if (!dhdat) {
+		fprintf(stderr, "Out of Memory!\n");
+		return 100;
+	}
+	dhdat->maxlen = 2048 - offsetof(struct dhcp_data, pkt);
 
 	retv = poll_init(fds, 67);
 	if (retv != 0)
@@ -121,7 +135,7 @@ int main(int argc, char *argv[])
 	do {
 		sysret = poll(fds, 2, 1000);
 		if (sysret == -1 && errno != EINTR) {
-			logmsg(LERR, "poll failed: %s\n", strerror(errno));
+			elog("poll failed: %s\n", strerror(errno));
 			retv = 600;
 			goto exit_30;
 		} else if ((sysret == -1 && errno == EINTR) || sysret == 0)
@@ -130,14 +144,15 @@ int main(int argc, char *argv[])
 		if (fds[0].revents) {
 			sockd = fds[0].fd;
 			fds[0].revents = 0;
-			logmsg(LINFO, "Receive a DHCP message at port 67.");
+			elog("Receive a DHCP message at port 67.");
+			packet_process(sockd, dhdat, NULL);
 		}
 		if (fds[1].revents) {
 			sockd = fds[1].fd;
 			fds[1].revents = 0;
-			logmsg(LINFO, "Receive a DHCP message at port 68.");
+			elog("Receive a DHCP message at port 4011.");
+			packet_process(sockd, dhdat, NULL);
 		}
-		packet_process(sockd, dhdat, NULL);
 
 	} while (global_exit == 0);
 
