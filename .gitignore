@@ -61,4 +61,5 @@ pxem
 retv
 core
 pxe_proxy
+pxe_boot
 cscope.*

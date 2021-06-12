@@ -118,6 +118,8 @@ static inline int dhcp_opt2str(char *buf, int maxlen,
 	int mlen;
 
 	mlen = maxlen - 1 < len ? maxlen - 1 : len;
+	if (mlen < len)
+		fprintf(stderr, "Option string size too big: %d - %d\n", maxlen, len);
 	memcpy(buf, str, mlen);
 	*(buf+mlen) = 0;
 	return mlen;
@@ -134,6 +136,7 @@ static int dhcp_echo_pxe_option(const struct dhcp_option *opt)
 	switch(opt->code) {
 	case PXE_END:
 		llog("PXE Option Ends(%hhu).\n", opt->code);
+		len = 1;
 		break;
 	case DHCP_PAD:
 		len = 1;
@@ -188,7 +191,7 @@ static int dhcp_echo_pxe_option(const struct dhcp_option *opt)
 	}
 
 	if (len == 0)
-		len = opt->len + sizeof(struct dhcp_option);
+		len = opt->len + sizeof(struct dhcp_option) - 1;
 	free(buf);
 	return len;
 }
@@ -294,6 +297,16 @@ static int dhcp_echo_option(const struct dhcp_option *opt)
 		len = 1;
 		llog("DHCP Message End(%hhu).\n", opt->code);
 		break;
+	case DHCP_SVRNAME:
+		llog("Option Server Name: ");
+		maxlen = dhcp_opt2str(buf, maxlen, opt->val, opt->len);
+		llog("%s\n", buf);
+		break;
+	case DHCP_BOOTFILE:
+		llog("Option Boot File: ");
+		maxlen = dhcp_opt2str(buf, maxlen, opt->val, opt->len);
+		llog("%s\n", buf);
+		break;
 	default:
 		llog("Option: %u, Length: %u, Vals:", opt->code,
 				opt->len);
@@ -304,7 +317,7 @@ static int dhcp_echo_option(const struct dhcp_option *opt)
 	}
 	free(buf);
 	if (len == 0)
-		len = opt->len + sizeof(struct dhcp_option);
+		len = opt->len + sizeof(struct dhcp_option) - 1;
 	return len;
 }
 
