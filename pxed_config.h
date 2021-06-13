@@ -22,6 +22,7 @@ struct boot_item {
 	char desc[MAX_PHRASE];
 	char bootfile[MAX_PATH];
 	char ipaddr[MAX_PHRASE];
+	unsigned int ip;
 	unsigned short clarch;
 	unsigned short index;
 };

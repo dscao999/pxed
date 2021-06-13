@@ -45,7 +45,7 @@ static int elog(const char *format, ...)
 
 	curtm = time(NULL);
 	datime = ctime(&curtm);
-	datime[strlen(datime)] = 0;
+	datime[strlen(datime)-1] = 0;
 	fprintf(stderr, "%s ", datime);
 	va_start(va, format);
 	len = vfprintf(stderr, format, va);
@@ -139,8 +139,8 @@ struct pxe_client {
 	uint16_t maxlen;
 };
 
-static int check_packet(int sockd, const struct sockaddr_in *src,
-		const struct dhcp_data *dhdat, FILE *flog)
+static int check_packet(struct server_info *sinf, const struct sockaddr_in *src,
+		const struct dhcp_data *dhdat)
 {
 	int retv = 0, venlen, sublen, optlen;
 	struct pxe_client pxec;
@@ -148,7 +148,6 @@ static int check_packet(int sockd, const struct sockaddr_in *src,
 	struct dhcp_option *mopt, *sopt;
 	struct dhcp_data *offer;
 	struct dhcp_packet *pkt;
-	struct in_addr svraddr;
 
 	opt = dhcp_option_search(dhdat, DHCP_CUUID);
 	if (!opt) {
@@ -185,10 +184,7 @@ static int check_packet(int sockd, const struct sockaddr_in *src,
 	mopt = dhcp_option_next(mopt);
 	mopt->code = DHCP_SVRID;
 	mopt->len = 4;
-	retv = inet_pton(AF_INET, "192.168.98.9", &svraddr);
-	if (retv != 1)
-		elog("Warning: inet_pton failed.\n");
-	memcpy(mopt->val, &svraddr, mopt->len);
+	memcpy(mopt->val, &sinf->sin_addr, mopt->len);
 	mopt = dhcp_option_next(mopt);
 	mopt->code = DHCP_CMUID;
 	mopt->len = 17;
@@ -207,55 +203,72 @@ static int check_packet(int sockd, const struct sockaddr_in *src,
 	sopt->len = 1;
 	sopt->val[0] = 7;
 	venlen += 3;
+
 	sopt = dhcp_option_next(sopt);
 	sopt->code = PXE_BOOTSVR;
+	int i, count, len;
+	const struct boot_item *vitems[8];
+	count = 0;
+	for (i = 0; i < sinf->boot_option->n_bitems && count < 8; i++) {
+		if (sinf->boot_option->bitems[i].clarch == pxec.arch)
+			vitems[count++] = &sinf->boot_option->bitems[i];
+	}
+	sopt->len = count * 7;
 	sublen = 0;
-	sopt->val[0] = 0x0;
-	sopt->val[1] = 0x1;
-	sopt->val[2] = 1;
-	memcpy(sopt->val+3, &svraddr, 4);
-	sublen += 7;
-	sopt->len = sublen;
+	for (i = 0; i < count; i++) {
+		sopt->val[sublen+0] = vitems[i]->index >> 8;
+		sopt->val[sublen+1] = vitems[i]->index & 0x0ff;
+		sopt->val[sublen+2] = 1;
+		memcpy(sopt->val+3+sublen, &vitems[i]->ip, 4);
+		sublen += 7;
+	}
 	venlen += sublen + 2;
 	sopt = dhcp_option_next(sopt);
 	sopt->code = PXE_BOOTMENU;
 	sublen = 0;
-	sopt->val[0] = 0;
-	sopt->val[1] = 1;
-	sopt->val[2] = 9;
-	memcpy(sopt->val+3, "LIOS v2.1", 9);
-	sublen += 12;
+	for (i = 0; i < count; i++) {
+		sopt->val[sublen+0] = vitems[i]->index >> 8;
+		sopt->val[sublen+1] = vitems[i]->index & 0x0ff;
+		len = strlen(vitems[i]->desc);
+		sopt->val[sublen+2] = len;
+		memcpy(sopt->val+sublen+3, vitems[i]->desc, len);
+		sublen += 3 + len;
+	}
 	sopt->len = sublen;
 	venlen += sublen + 2;
+
 	sopt = dhcp_option_next(sopt);
 	sopt->code = PXE_BOOTPROMPT;
-	sublen = 0;
-	sopt->val[0] = 60;
-	memcpy(sopt->val+1, "LIOS PXE Server", 15);
-	sublen += 16;
-	sopt->len = sublen;
-	venlen += sublen + 2;
+	sublen = strlen(sinf->boot_option->prompt);
+	sopt->val[0] = sinf->boot_option->timeout;
+	memcpy(sopt->val+1, sinf->boot_option->prompt, sublen);
+	sopt->len = sublen + 1;
+	venlen += sopt->len + 2;
 	sopt = dhcp_option_next(sopt);
 	sopt->code = PXE_END;
 	venlen += 1;
 	assert(venlen == &sopt->code - mopt->val + 1);
+
 	mopt->len = venlen;
 	mopt = dhcp_option_next(mopt);
 	mopt->code = DHCP_END;
 	optlen = &mopt->code - (uint8_t *)pkt->options + 1;
 	offer->len = sizeof(struct dhcp_head) + optlen;
-	if (flog) {
-		fwrite(&offer->len, sizeof(offer->len), 1, flog);
-		fwrite(pkt, 1, offer->len, flog);
+	if (sinf->flog) {
+		fwrite(&offer->len, sizeof(offer->len), 1, sinf->flog);
+		fwrite(pkt, 1, offer->len, sinf->flog);
 	}
+	if (sinf->verbose)
+		dhcp_echo_packet(offer);
 	
-	retv = sendto(sockd, pkt, offer->len, 0, src, sizeof(struct sockaddr_in));
+	retv = sendto(sinf->sockd, pkt, offer->len, 0,
+			src, sizeof(struct sockaddr_in));
 	if (retv == -1)
 		elog("Failed to send offer: %s\n", strerror(errno));
 	return retv;
 }
 
-static int packet_process(struct server_info *sinfo, struct dhcp_data *dhdat)
+static int packet_process(struct server_info *sinf, struct dhcp_data *dhdat)
 {
 	int len, buflen = dhdat->maxlen;
 	struct sockaddr_in srcaddr;
@@ -266,7 +279,7 @@ static int packet_process(struct server_info *sinfo, struct dhcp_data *dhdat)
 	dhdat->len = 0;
 	socklen = sizeof(srcaddr);
 	memset(&srcaddr, 0, socklen);
-	len = recvfrom(sinfo->sockd, buf, buflen, 0,
+	len = recvfrom(sinf->sockd, buf, buflen, 0,
 			(struct sockaddr *)&srcaddr, &socklen);
 	if (len <= 0) {
 		elog("recvfrom failed: %s\n", strerror(errno));
@@ -274,26 +287,27 @@ static int packet_process(struct server_info *sinfo, struct dhcp_data *dhdat)
 	}
 	dhdat->len = len;
 	if (!dhcp_pxe(dhdat)) {
-		if (sinfo->verbose)
+		if (sinf->verbose)
 			elog("Not a PXE discover packet, Ignored.\n");
 		return 0;
 	}
 	copt = dhcp_option_search(dhdat, DHCP_MSGTYPE);
 	if (!copt || copt->val[0] != DHCP_DISCOVER) {
-		if (sinfo->verbose)
-			elog("Not a DHCP discover request, Ignored.\n");
+		if (sinf->verbose)
+			elog("Not a PXE discover request, Ignored.\n");
 		return 0;
 	}
 
 	if (socklen > sizeof(srcaddr))
 		elog("Warning: address size too large %d\n", socklen);
-
-	if (sinfo->flog) {
-		fwrite(&len, sizeof(int), 1, sinfo->flog);
-		fwrite(buf, 1, len, sinfo->flog);
+	if (sinf->flog) {
+		fwrite(&len, sizeof(int), 1, sinf->flog);
+		fwrite(buf, 1, len, sinf->flog);
 	}
+	if (sinf->verbose)
+		dhcp_echo_packet(dhdat);
 	inet_pton(AF_INET, "255.255.255.255", &srcaddr.sin_addr);
-	len = check_packet(sinfo->sockd, &srcaddr, dhdat, NULL);
+	len = check_packet(sinf, &srcaddr, dhdat);
 	return len;
 }
 
@@ -349,7 +363,7 @@ int main(int argc, char *argv[])
 	opterr = 0;
 	fin = 0;
 	do {
-		c = getopt(argc, argv, ":i:c:");
+		c = getopt(argc, argv, ":i:vc:");
 		switch(c) {
 		case '?':
 			elog("Unknown option: %c\n", (char)optopt);
@@ -399,6 +413,14 @@ int main(int argc, char *argv[])
 		elog("Signal Handler Cannot be setup: %s\n",
 				strerror(errno));
 
+	sinfo.boot_option = bopt;
+	if (strlen(bopt->logfile) > 0) {
+		sinfo.flog = fopen(bopt->logfile, "w");
+		if (!sinfo.flog)
+			elog("Warning! Cannot open log file %s: %s\n",
+					bopt->logfile, strerror(errno));
+	}
+	
 	dhdat = malloc(2048);
 	if (!dhdat) {
 		elog("Out of Memory!\n");
@@ -411,7 +433,6 @@ int main(int argc, char *argv[])
 		goto exit_10;
 
 	sinfo.sockd = pfd.fd;
-	sinfo.boot_option = bopt;
 	retv = get_nicaddr(pfd.fd, iface, &sinfo.sin_addr);
 	if (retv != 0) {
 		elog("Cannot get IP address of %s.\n", iface);
@@ -427,16 +448,18 @@ int main(int argc, char *argv[])
 			goto exit_20;
 		} else if ((sysret == -1 && errno == EINTR) || sysret == 0)
 			continue;
-		
-		if (pfd.revents) {
-			pfd.revents = 0;
-			packet_process(&sinfo, dhdat);
-		}
+		if (pfd.revents == 0)
+			continue;
+
+		pfd.revents = 0;
+		packet_process(&sinfo, dhdat);
 	} while (global_exit == 0);
 
 exit_20:
 	close(pfd.fd);
 exit_10:
 	free(dhdat);
+	if (sinfo.flog)
+		fclose(sinfo.flog);
 	return retv;
 }

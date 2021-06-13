@@ -1,10 +1,11 @@
 %code top{
+#include <stdio.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #include <string.h>
 #include <errno.h>
-#include "miscs.h"
+#include <arpa/inet.h>
 #include "pxed_config.h"
 
 static int noboot = 0;
@@ -41,9 +42,6 @@ static int file_ok(const char *filename);
 %nonassoc	SETTO
 
 %%
-
-config: lines
-	;
 
 lines: /* empty */
 	| lines line
@@ -142,37 +140,46 @@ extern int yyparse(void);
 
 int pxed_config(const char *confname)
 {
-	int retc, i;
-	const struct boot_item *btm;
+	int retc, retv, i;
+	struct boot_item *btm;
 
+	retv = 0;
 	bopt = &b_opt;
+	b_opt.logfile[0] = 0;
 	yyin = fopen(confname, "rb");
-	if (unlikely(!yyin)) {
+	if (!yyin) {
 		fprintf(stderr, "Cannot open config file \"%s\": %s\n", confname,
 				strerror(errno));
 		return -1;
 	}
 	retc = yyparse();
+	fclose(yyin);
 	if (retc) {
 		fprintf(stderr, "Configuration File Error: %d\n", retc);
 		return -2;
 	}
-	fclose(yyin);
 
 	b_opt.n_bitems = noboot;
 	printf("TFTP Root: %s\n", tftp_root);
 	printf("Timeout: %d\n", bopt->timeout);
 	printf("Prompt: %s\n", bopt->prompt);
 	printf("Number boot items: %d\n", noboot);
-	for (i = 0, btm = bopt->bitems; i < noboot; i++, btm++) {
-		printf("Boot Item: %d:\n", i);
+	printf("Log File: %s\n", bopt->logfile);
+	for (i = 0, btm = b_opt.bitems; i < noboot; i++, btm++) {
+		printf("Boot Item: %d:\n", i+1);
 		printf("\tBoot Server Type: %04hX\n", btm->index);
 		printf("\tClient Type: %d\n", (int)btm->clarch);
 		printf("\tDescription: %s\n", btm->desc);
 		printf("\tBoot File: %s\n", btm->bootfile);
 		printf("\tIP Address: %s\n", btm->ipaddr);
+		retc = inet_pton(AF_INET, btm->ipaddr, &btm->ip);
+		if (retc != 1) {
+			fprintf(stderr, "Cannot convert %s to integer.\n",
+					btm->ipaddr);
+			retv = -3;
+		}
 	}
-	return 0;
+	return retv;
 }
 
 int yyerror(const char *s)
