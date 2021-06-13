@@ -10,42 +10,50 @@
 
 static inline int lock_try(volatile int *lock)
 {
-	int retv;
+	int retv = 1;
 
 	__asm__ __volatile__(	"movl $1, %%eax\n\t"
 				"xchgl %%eax, (%0)\n\t"
-				:"=r"(lock), "=a"(retv)
+				:"=r"(lock), "="(retv)
 				:"0"(lock)
 			);
 	return retv;
 }
 
-void dump_stack(void);
-
-#define ENOMEM	12
-#define ENOSPACE	112
-
-enum LOGLVL {LERR = 5, LWARN = 4, LINFO = 1, LABORT = 9};
-
-static inline unsigned int swap32(unsigned int x)
+static int elog(const char *format, ...)
 {
-	union {
-		unsigned int v;
-		unsigned char b[4];
-	} u;
-	u.v = x;
-	return (u.b[0] << 24)|(u.b[1] << 16)|(u.b[2] << 8)|u.b[3];
+	va_list va;
+	int len;
+	time_t curtm;
+	char *datime;
+
+	curtm = time(NULL);
+	datime = ctime(&curtm);
+	datime[strlen(datime)-1] = 0;
+	fprintf(stderr, "%s ", datime);
+	va_start(va, format);
+	len = vfprintf(stderr, format, va);
+	va_end(va);
+	return len;
 }
 
-int miscs_init(const char *logfile);
-void miscs_exit(void);
-void logmsg(int level, const char *fmt, ...);
-int llog(const char *fmt, ...);
+static inline unsigned long
+time_elapsed(const struct timespec *tm0, const struct timespec *tm1)
+{
+	long usec;
+	time_t sec;
 
-void *check_pointer(void *ptr);
-
-unsigned long time_elapsed(const struct timespec *tm0,
-		const struct timespec *tm1);
+	usec = tm1->tv_nsec - tm0->tv_nsec;
+	sec = tm1->tv_sec - tm0->tv_sec;
+	if (usec < 0) {
+		usec += 1000000000;
+		sec--;
+	}
+	if (sec < 0)
+		return 0;
+	else
+		return (sec * 1000) + usec / 1000000;
+}
 
 static inline int align8(int len)
 {

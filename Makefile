@@ -20,7 +20,7 @@ conftx: conf_test.o  pxed_config.tab.o lex.yy.o miscs.o
 pxem:	pxe_monitor.o dhcp.o miscs.o
 	$(LINK.o) $^ -o $@
 
-pxe_proxy: pxe_proxy.o dhcp.o pxed_config.tab.o lex.yy.o
+pxe_proxy: pxe_proxy.o dhcp.o pxed_config.tab.o lex.yy.o net_utils.o
 	$(LINK.o) $^ -o $@
 
 pxe_boot: pxe_bootsvr.o dhcp.o
@@ -39,6 +39,7 @@ pxed_config.tab.c pxed_config.tab.h: pxed_config.y
 	bison -d -v pxed_config.y
 
 clean:
+	rm -f *.d
 	rm -f pxed conftx pxem retv *.o pxe_proxy
 	rm -f pxed_config.tab.c lex.yy.c pxed_config.tab.h
 

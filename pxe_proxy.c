@@ -7,17 +7,13 @@
 #include <sys/socket.h>
 #include <netdb.h>
 #include <errno.h>
-#include <poll.h>
 #include <time.h>
 #include <signal.h>
-#include <sched.h>
-#include <stdarg.h>
 #include <assert.h>
-#include <arpa/inet.h>
-#include <dirent.h>
-#include <sys/ioctl.h>
 #include <net/if.h>
+#include "miscs.h"
 #include "dhcp.h"
+#include "net_utils.h"
 #include "pxed_config.h"
 
 static volatile int global_exit = 0;
@@ -35,104 +31,6 @@ struct server_info {
 	int verbose;
 	FILE *flog;
 };
-
-static int elog(const char *format, ...)
-{
-	va_list va;
-	int len;
-	time_t curtm;
-	char *datime;
-
-	curtm = time(NULL);
-	datime = ctime(&curtm);
-	datime[strlen(datime)-1] = 0;
-	fprintf(stderr, "%s ", datime);
-	va_start(va, format);
-	len = vfprintf(stderr, format, va);
-	va_end(va);
-	return len;
-}
-
-static int get_nicaddr(int sockd, const char *iface, struct in_addr *addr)
-{
-	struct ifreq req;
-	int sysret;
-	struct sockaddr_in *ipv4_addr;
-
-	strncpy(req.ifr_name, iface, IFNAMSIZ);
-	sysret = ioctl(sockd, SIOCGIFADDR, &req);
-	if (sysret == -1) {
-		elog("ioctl failed: %s\n", strerror(errno));
-		return sysret;
-	}
-	ipv4_addr = (struct sockaddr_in *)&req.ifr_addr;
-	*addr = ipv4_addr->sin_addr;
-	return sysret;
-}
-
-static int poll_init(struct pollfd *pfd, int port, const char *iface)
-{
-	int sockd, retv, brd;
-	char pstr[16];
-	struct addrinfo hints, *res;
-
-	retv = 0;
-	snprintf(pstr, sizeof(pstr), "%d", port);
-	memset(&hints, 0, sizeof(hints));
-	hints.ai_family = AF_INET;
-	hints.ai_socktype = SOCK_DGRAM;
-	hints.ai_flags = AI_PASSIVE | AI_NUMERICSERV;
-	while ((retv = getaddrinfo(NULL, pstr, &hints, &res)) == EAI_AGAIN)
-		sched_yield();
-	if (retv != 0) {
-		elog("getaddrinfo failed: %s\n", gai_strerror(retv));
-		retv = -retv;
-		goto exit_10;
-	}
-
-	sockd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
-	if (sockd == -1) {
-		elog("Cannot create socket: %s\n", strerror(errno));
-		retv = -errno;
-		goto exit_20;
-	}
-	if (port == 67) {
-		brd = 1;
-		retv = setsockopt(sockd, SOL_SOCKET, SO_BROADCAST, &brd, 4);
-		if (retv == -1) {
-			elog("Cannot set to broadcast: %s\n", strerror(errno));
-			retv = -errno;
-			goto exit_30;
-		}
-	}
-	retv = setsockopt(sockd, SOL_SOCKET, SO_BINDTODEVICE, iface,
-			sizeof(char *));
-	if (retv == -1) {
-		elog("Cannot bind socket to device %s: %s\n", iface,
-				strerror(errno));
-		retv = -errno;
-		goto exit_30;
-	}
-
-	pfd->fd = sockd;
-	pfd->revents = 0;
-	pfd->events = POLLIN;
-	if (bind(sockd, res->ai_addr, res->ai_addrlen) == -1) {
-		elog("Cannot bind socket: %s\n", strerror(errno));
-		retv = -errno;
-		goto exit_30;
-	}
-	freeaddrinfo(res);
-	return retv;
-
-exit_30:
-	close(pfd->fd);
-exit_20:
-	freeaddrinfo(res);
-exit_10:
-	return retv;
-}
-
 struct pxe_client {
 	uint8_t uuid[16];
 	uint16_t arch;
@@ -309,40 +207,6 @@ static int packet_process(struct server_info *sinf, struct dhcp_data *dhdat)
 	inet_pton(AF_INET, "255.255.255.255", &srcaddr.sin_addr);
 	len = check_packet(sinf, &srcaddr, dhdat);
 	return len;
-}
-
-static int get_first_nic(char *buf)
-{
-	DIR *dir;
-	int retv = 0, found;
-	struct dirent *ent;
-	static const char *netdir = "/sys/class/net";
-
-	dir = opendir(netdir);
-	if (!dir) {
-		elog("Cannot open directory %s: %s\n", netdir,
-				strerror(errno));
-		return retv;
-	}
-	errno = 0;
-	found = 0;
-	ent = readdir(dir);
-	while (ent) {
-		if ((ent->d_type & DT_LNK) == 0)
-			goto next_nic;
-		if (strcmp(ent->d_name, "lo") == 0)
-			goto next_nic;
-		strcpy(buf, ent->d_name);
-		found = 1;
-		break;
-next_nic:
-		ent = readdir(dir);
-	}
-	if (found == 0)
-		elog("No NIC is found.\n");
-	else
-		printf("Info: Bind to NIC \'%s\'\n", buf);
-	return found;
 }
 
 
