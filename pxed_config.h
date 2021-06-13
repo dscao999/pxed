@@ -21,15 +21,16 @@ enum client_arch {
 struct boot_item {
 	char desc[MAX_PHRASE];
 	char bootfile[MAX_PATH];
-	enum client_arch clarch;
-	unsigned short svrtyp;
+	char ipaddr[MAX_PHRASE];
+	unsigned short clarch;
+	unsigned short index;
 };
 
 struct boot_option {
-	unsigned int bvip;
         unsigned short timeout;
 	unsigned short n_bitems;
         char prompt[MAX_PHRASE];
+	char logfile[MAX_PATH];
 	struct boot_item bitems[MAX_NUM_ITEMS];
 };
 

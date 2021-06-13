@@ -8,10 +8,12 @@ int lineno = 1;
 NAME	[a-zA-Z][a-zA-Z0-9_.\-]*
 %%
 
-#.*$		;
+^[ \t]*#.*$	{return COMMENT;}
 [ \t]+		;
-\n		{lineno++;}
+\n		{lineno++; return NL;}
 =		{return SETTO;}
+ip		{return IP;}
+log		{return LOG;}
 tftp[ \t]+root	{return TFTP_ROOT;}
 timeout		{return TMOUT;}
 prompt		{return PROMPT;}
@@ -20,8 +22,9 @@ X86_64_EFI	{return TX86_64_EFI;}
 IA64_EFI	{return TIA64_EFI;}
 bootfile	{return BOOT_FILE;}
 desc		{return DESC;}
+[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+ {yylval.strval = yytext; return IPADDR;}
 [0-9]+		{yylval.intval = atoi(yytext); return NUMBER;}
-{NAME}		{yylval.strval = yytext; return WORD;}
+\"{NAME}([ \t]+{NAME})*\" {yytext[yyleng-1] = 0; yylval.strval = yytext+1; return PHRASE;}
 \/{NAME}(\/{NAME})*\/        {yylval.strval = yytext; return DIRECT;}
 \/{NAME}(\/{NAME})*        {yylval.strval = yytext; return PATH;}
-\"{NAME}([ \t]+{NAME})*\" {yytext[yyleng-1] = 0; yylval.strval = yytext+1; return PHRASE;}
+{NAME}		{yylval.strval = yytext; return WORD;}

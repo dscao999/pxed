@@ -62,4 +62,5 @@ retv
 core
 pxe_proxy
 pxe_boot
+pxed_config.output
 cscope.*

@@ -8,12 +8,17 @@
 #include <netdb.h>
 #include <errno.h>
 #include <poll.h>
+#include <time.h>
 #include <signal.h>
 #include <sched.h>
 #include <stdarg.h>
 #include <assert.h>
 #include <arpa/inet.h>
+#include <dirent.h>
+#include <sys/ioctl.h>
+#include <net/if.h>
 #include "dhcp.h"
+#include "pxed_config.h"
 
 static volatile int global_exit = 0;
 
@@ -23,15 +28,46 @@ void sig_handler(int sig)
 		global_exit = 1;
 }
 
+struct server_info {
+	const struct boot_option *boot_option;
+	struct in_addr sin_addr;
+	int sockd;
+	int verbose;
+	FILE *flog;
+};
+
 static int elog(const char *format, ...)
 {
 	va_list va;
 	int len;
+	time_t curtm;
+	char *datime;
 
+	curtm = time(NULL);
+	datime = ctime(&curtm);
+	datime[strlen(datime)] = 0;
+	fprintf(stderr, "%s ", datime);
 	va_start(va, format);
 	len = vfprintf(stderr, format, va);
 	va_end(va);
 	return len;
+}
+
+static int get_nicaddr(int sockd, const char *iface, struct in_addr *addr)
+{
+	struct ifreq req;
+	int sysret;
+	struct sockaddr_in *ipv4_addr;
+
+	strncpy(req.ifr_name, iface, IFNAMSIZ);
+	sysret = ioctl(sockd, SIOCGIFADDR, &req);
+	if (sysret == -1) {
+		elog("ioctl failed: %s\n", strerror(errno));
+		return sysret;
+	}
+	ipv4_addr = (struct sockaddr_in *)&req.ifr_addr;
+	*addr = ipv4_addr->sin_addr;
+	return sysret;
 }
 
 static int poll_init(struct pollfd *pfd, int port, const char *iface)
@@ -69,16 +105,15 @@ static int poll_init(struct pollfd *pfd, int port, const char *iface)
 			goto exit_30;
 		}
 	}
-	if (iface) {
-		retv = setsockopt(sockd, SOL_SOCKET, SO_BINDTODEVICE, iface,
-				sizeof(char *));
-		if (retv == -1) {
-			elog("Cannot bind socket to device %s: %s\n", iface,
-					strerror(errno));
-			retv = -errno;
-			goto exit_30;
-		}
+	retv = setsockopt(sockd, SOL_SOCKET, SO_BINDTODEVICE, iface,
+			sizeof(char *));
+	if (retv == -1) {
+		elog("Cannot bind socket to device %s: %s\n", iface,
+				strerror(errno));
+		retv = -errno;
+		goto exit_30;
 	}
+
 	pfd->fd = sockd;
 	pfd->revents = 0;
 	pfd->events = POLLIN;
@@ -220,7 +255,7 @@ static int check_packet(int sockd, const struct sockaddr_in *src,
 	return retv;
 }
 
-static int packet_process(int sockd, struct dhcp_data *dhdat, FILE *fout)
+static int packet_process(struct server_info *sinfo, struct dhcp_data *dhdat)
 {
 	int len, buflen = dhdat->maxlen;
 	struct sockaddr_in srcaddr;
@@ -231,49 +266,131 @@ static int packet_process(int sockd, struct dhcp_data *dhdat, FILE *fout)
 	dhdat->len = 0;
 	socklen = sizeof(srcaddr);
 	memset(&srcaddr, 0, socklen);
-	len = recvfrom(sockd, buf, buflen, 0, (struct sockaddr *)&srcaddr,
-			&socklen);
+	len = recvfrom(sinfo->sockd, buf, buflen, 0,
+			(struct sockaddr *)&srcaddr, &socklen);
 	if (len <= 0) {
 		elog("recvfrom failed: %s\n", strerror(errno));
 		return len;
 	}
 	dhdat->len = len;
 	if (!dhcp_pxe(dhdat)) {
-		elog("Not a PXE discover packet, Ignored.\n");
+		if (sinfo->verbose)
+			elog("Not a PXE discover packet, Ignored.\n");
 		return 0;
 	}
 	copt = dhcp_option_search(dhdat, DHCP_MSGTYPE);
 	if (!copt || copt->val[0] != DHCP_DISCOVER) {
-		elog("Not a DHCP discover request, Ignored.\n");
+		if (sinfo->verbose)
+			elog("Not a DHCP discover request, Ignored.\n");
 		return 0;
 	}
 
 	if (socklen > sizeof(srcaddr))
 		elog("Warning: address size too large %d\n", socklen);
 
-	if (fout) {
-		fwrite(&len, sizeof(len), 1, fout);
-		fwrite(buf, 1, len, fout);
+	if (sinfo->flog) {
+		fwrite(&len, sizeof(int), 1, sinfo->flog);
+		fwrite(buf, 1, len, sinfo->flog);
 	}
 	inet_pton(AF_INET, "255.255.255.255", &srcaddr.sin_addr);
-	len = check_packet(sockd, &srcaddr, dhdat, NULL);
+	len = check_packet(sinfo->sockd, &srcaddr, dhdat, NULL);
 	return len;
 }
 
+static int get_first_nic(char *buf)
+{
+	DIR *dir;
+	int retv = 0, found;
+	struct dirent *ent;
+	static const char *netdir = "/sys/class/net";
+
+	dir = opendir(netdir);
+	if (!dir) {
+		elog("Cannot open directory %s: %s\n", netdir,
+				strerror(errno));
+		return retv;
+	}
+	errno = 0;
+	found = 0;
+	ent = readdir(dir);
+	while (ent) {
+		if ((ent->d_type & DT_LNK) == 0)
+			goto next_nic;
+		if (strcmp(ent->d_name, "lo") == 0)
+			goto next_nic;
+		strcpy(buf, ent->d_name);
+		found = 1;
+		break;
+next_nic:
+		ent = readdir(dir);
+	}
+	if (found == 0)
+		elog("No NIC is found.\n");
+	else
+		printf("Info: Bind to NIC \'%s\'\n", buf);
+	return found;
+}
+
+
 int main(int argc, char *argv[])
 {
-	int retv, sockd, sysret;
+	int retv, sysret, fin, c;
 	struct pollfd pfd;
 	struct sigaction sigact;
 	struct dhcp_data *dhdat;
-	const char *iface;
+	const char *iface = NULL, *config = NULL;
+	static char ifname[32];
+	extern char *optarg;
+	extern int opterr, optopt;
+	struct server_info sinfo;
 
-	iface = NULL;
-	if (argc > 1)
-		iface = argv[1];
+	sinfo.verbose = 0;
+	sinfo.flog = NULL;
+	opterr = 0;
+	fin = 0;
+	do {
+		c = getopt(argc, argv, ":i:c:");
+		switch(c) {
+		case '?':
+			elog("Unknown option: %c\n", (char)optopt);
+			break;
+		case ':':
+			elog("Missing argument for %c\n", (char)optopt);
+			break;
+		case -1:
+			fin = 1;
+			break;
+		case 'i':
+			iface = optarg;
+			break;
+		case 'c':
+			config = optarg;
+			break;
+		case 'v':
+			sinfo.verbose = 1;
+			break;
+		default:
+			elog("Internal Logic error in processing options.\n");
+			assert(0);
+		}
+	} while (fin == 0);
 
-	memset(&pfd, 0, sizeof(pfd));
-	retv = 0;
+	if (!iface) {
+		retv = get_first_nic(ifname);
+		if (retv == 1)
+			iface = ifname;
+		else {
+			elog("No NIC port.\n");
+			return 3;
+		}
+	}
+	if (!config)
+		config = "/etc/pxed.conf";
+	retv = pxed_config(config);
+	if (retv != 0) {
+		elog("Cannot parse configuration file: %s\n", config);
+		return 1;
+	}
 
 	memset(&sigact, 0, sizeof(sigact));
 	sigact.sa_handler = sig_handler;
@@ -284,7 +401,7 @@ int main(int argc, char *argv[])
 
 	dhdat = malloc(2048);
 	if (!dhdat) {
-		fprintf(stderr, "Out of Memory!\n");
+		elog("Out of Memory!\n");
 		return 100;
 	}
 	dhdat->maxlen = 2048 - offsetof(struct dhcp_data, pkt);
@@ -292,29 +409,32 @@ int main(int argc, char *argv[])
 	retv = poll_init(&pfd, 67, iface);
 	if (retv != 0)
 		goto exit_10;
-/*	retv = poll_init(fds+1, 4011, iface);
-	if (retv != 0)
-		goto exit_20;*/
 
+	sinfo.sockd = pfd.fd;
+	sinfo.boot_option = bopt;
+	retv = get_nicaddr(pfd.fd, iface, &sinfo.sin_addr);
+	if (retv != 0) {
+		elog("Cannot get IP address of %s.\n", iface);
+		goto exit_20;
+	}
 
 	global_exit = 0;
 	do {
 		sysret = poll(&pfd, 1, 1000);
 		if (sysret == -1 && errno != EINTR) {
 			elog("poll failed: %s\n", strerror(errno));
-			retv = 600;
-			goto exit_30;
+			retv = 10;
+			goto exit_20;
 		} else if ((sysret == -1 && errno == EINTR) || sysret == 0)
 			continue;
 		
 		if (pfd.revents) {
-			sockd = pfd.fd;
 			pfd.revents = 0;
-			packet_process(sockd, dhdat, NULL);
+			packet_process(&sinfo, dhdat);
 		}
 	} while (global_exit == 0);
 
-exit_30:
+exit_20:
 	close(pfd.fd);
 exit_10:
 	free(dhdat);

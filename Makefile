@@ -20,7 +20,7 @@ conftx: conf_test.o  pxed_config.tab.o lex.yy.o miscs.o
 pxem:	pxe_monitor.o dhcp.o miscs.o
 	$(LINK.o) $^ -o $@
 
-pxe_proxy:	pxe_proxy.o dhcp.o
+pxe_proxy: pxe_proxy.o dhcp.o pxed_config.tab.o lex.yy.o
 	$(LINK.o) $^ -o $@
 
 pxe_boot: pxe_bootsvr.o dhcp.o

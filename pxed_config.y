@@ -34,28 +34,33 @@ static int file_ok(const char *filename);
 %token <strval>	PHRASE
 %token <strval>	PATH
 %token <strval>	DIRECT
+%token <strval>	IPADDR
 
-%token	TX86_64_EFI TX86_BIOS TIA64_EFI
+%token	TX86_64_EFI TX86_BIOS TIA64_EFI NL IP LOG COMMENT
 %left	DESC BOOT_FILE TFTP_ROOT TMOUT PROMPT
 %nonassoc	SETTO
 
 %%
 
-specs:	/* empty */
-        | spec
-	| specs spec
+config: lines
 	;
 
+lines: /* empty */
+	| lines line
+	;
 
-spec:	tftp_root
-	| timeout
-	| prompt
-	| bspec {
+line:	NL
+	| COMMENT NL
+	| tftp_root NL
+	| logfile NL
+	| timeout NL
+	| prompt NL
+	| bspec NL {
 		if(file_ok(bopt->bitems[noboot].bootfile)) {
-			b_opt.bitems[noboot].svrtyp = 0x3001 + noboot;
+			b_opt.bitems[noboot].index = 0x3001 + noboot;
 			noboot++;
 		} else {
-			logmsg(LERR, "An Invalid File Boot Specification: %s," \
+			fprintf(stderr, "An Invalid File Boot Specification: %s," \
 					" ignored.\n",
 					b_opt.bitems[noboot].bootfile);
 			config_err = 1;
@@ -63,19 +68,30 @@ spec:	tftp_root
 	}
 	;
 
-bspec:	bitem bitem bitem
+logfile: LOG SETTO PATH {strncpy(b_opt.logfile, $3, MAX_PATH);}
+       ;
+
+bspec:	client desc bootfile ip
 	;
 
-bitem:	TX86_64_EFI {b_opt.bitems[noboot].clarch = X86_64_EFI;}
+client:	TX86_64_EFI {b_opt.bitems[noboot].clarch = X86_64_EFI;}
 	| TX86_BIOS {b_opt.bitems[noboot].clarch = X86_BIOS;}
 	| TIA64_EFI {b_opt.bitems[noboot].clarch = IA64_EFI;}
-	| BOOT_FILE SETTO PATH {strncpy(b_opt.bitems[noboot].bootfile, $3, MAX_PATH);}
+	;
+
+bootfile: BOOT_FILE SETTO PATH {strncpy(b_opt.bitems[noboot].bootfile, $3, MAX_PATH);}
 	| BOOT_FILE SETTO WORD {strncpy(b_opt.bitems[noboot].bootfile, $3, MAX_PATH);}
-	| DESC SETTO WORD {strncpy(b_opt.bitems[noboot].desc, $3, MAX_PHRASE);}
+	;
+
+desc:	DESC SETTO WORD {strncpy(b_opt.bitems[noboot].desc, $3, MAX_PHRASE);}
 	| DESC SETTO PHRASE {strncpy(b_opt.bitems[noboot].desc, $3, MAX_PHRASE);}
 	;
 
-tftp_root: TFTP_ROOT SETTO DIRECT {strncpy(tftp_root, $3, sizeof(tftp_root));}
+ip:	IP SETTO IPADDR {strncpy(b_opt.bitems[noboot].ipaddr, $3, MAX_PHRASE);}
+	;
+
+tftp_root: TFTP_ROOT SETTO PATH {strncpy(tftp_root, $3, sizeof(tftp_root));}
+	 | TFTP_ROOT SETTO DIRECT {strncpy(tftp_root, $3, sizeof(tftp_root));}
 	;
 
 timeout: TMOUT SETTO NUMBER {b_opt.timeout = $3;}
@@ -132,13 +148,13 @@ int pxed_config(const char *confname)
 	bopt = &b_opt;
 	yyin = fopen(confname, "rb");
 	if (unlikely(!yyin)) {
-		logmsg(LERR, "Cannot open config file \"%s\": %s\n", confname,
+		fprintf(stderr, "Cannot open config file \"%s\": %s\n", confname,
 				strerror(errno));
 		return -1;
 	}
 	retc = yyparse();
 	if (retc) {
-		logmsg(LERR, "Configuration File Error: %d\n", retc);
+		fprintf(stderr, "Configuration File Error: %d\n", retc);
 		return -2;
 	}
 	fclose(yyin);
@@ -150,10 +166,11 @@ int pxed_config(const char *confname)
 	printf("Number boot items: %d\n", noboot);
 	for (i = 0, btm = bopt->bitems; i < noboot; i++, btm++) {
 		printf("Boot Item: %d:\n", i);
-		printf("\tBoot Server Type: %04hX\n", btm->svrtyp);
+		printf("\tBoot Server Type: %04hX\n", btm->index);
 		printf("\tClient Type: %d\n", (int)btm->clarch);
 		printf("\tDescription: %s\n", btm->desc);
 		printf("\tBoot File: %s\n", btm->bootfile);
+		printf("\tIP Address: %s\n", btm->ipaddr);
 	}
 	return 0;
 }
@@ -162,6 +179,6 @@ int yyerror(const char *s)
 {
 	int retv;
 
-	retv = fprintf(stderr, "Line: %d: %s\n", lineno, yytext);
+	retv = fprintf(stderr, "%s: Line %d, %s\n", s, lineno, yytext);
 	return retv;
 }
