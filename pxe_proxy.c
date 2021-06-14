@@ -27,9 +27,10 @@ void sig_handler(int sig)
 
 struct server_info {
 	const struct boot_option *boot_option;
+	FILE *flog;
+	char ipaddr[32];
 	struct in_addr sin_addr;
 	int verbose;
-	FILE *flog;
 };
 struct pxe_client {
 	uint8_t uuid[16];
@@ -38,8 +39,7 @@ struct pxe_client {
 };
 
 static int offer_pxe(const struct server_info *sinf, int sockd,
-		const struct sockaddr_in *src,
-		const struct dhcp_data *dhdat)
+		const struct sockaddr_in *src, const struct dhcp_data *dhdat)
 {
 	int retv = 0, venlen, sublen, optlen;
 	struct pxe_client pxec;
@@ -235,7 +235,8 @@ void * get_pxe_discover(void *data)
 		sysret = poll(&arg->pfd, 1, 1000);
 		if (sysret == -1 && errno != EINTR) {
 			elog("poll failed: %s\n", strerror(errno));
-			goto exit_10;
+			global_exit = 1;
+			continue;
 		} else if ((sysret == -1 && errno == EINTR) || sysret == 0)
 			continue;
 		if (arg->pfd.revents == 0)
@@ -245,17 +246,212 @@ void * get_pxe_discover(void *data)
 		discover_packet_process(arg->sinf, arg->pfd.fd, dhdat);
 	} while (global_exit == 0);
 
-exit_10:
 	free(dhdat);
 	return NULL;
 }
 
-void * get_pxe_request(void *arg)
+static int ack_pxe(const struct server_info *sinf, int sockd,
+		const struct sockaddr_in *src, const struct dhcp_data *dhdat)
 {
-	static const struct timespec itv = {.tv_sec = 0, .tv_nsec = 200000000};
+	int retv = 0, venlen, optlen;
+	struct pxe_client pxec;
+	const struct dhcp_option *opt, *vopt;
+	struct dhcp_option *mopt, *sopt;
+	struct dhcp_data *offer;
+	struct dhcp_packet *pkt;
+	uint16_t svrtyp, layer;
+
+	opt = dhcp_option_search(dhdat, DHCP_CUUID);
+	if (!opt) {
+		opt = dhcp_option_search(dhdat, DHCP_CMUID);
+		if (!opt) {
+			elog("No UUID in PXE discover.\n");
+			return retv;
+		}
+	}
+	memcpy(pxec.uuid, opt->val+1, sizeof(pxec.uuid));
+	opt = dhcp_option_search(dhdat, DHCP_CLARCH);
+	if (!opt) {
+		elog("No client architecture type in PXE discover.\n");
+		return retv;
+	}
+	pxec.arch = (opt->val[0] << 8) | opt->val[1];
+	opt = dhcp_option_search(dhdat, DHCP_MAXLEN);
+	if (!opt) {
+		pxec.maxlen = 1024;
+	} else
+		pxec.maxlen = (opt->val[0] << 8) | opt->val[1];
+	opt = dhcp_option_search(dhdat, DHCP_VENDOR);
+	if (!opt) {
+		elog("No Vendor option in pxe request/inform.\n");
+		return retv;
+	}
+	vopt = (const struct dhcp_option *)opt->val;
+	if (vopt->code != PXE_BOOTITEM) {
+		elog("No PXE Boot Item in pxe request/inform.\n");
+		return retv;
+	}
+	svrtyp = (vopt->val[0] << 8) | vopt->val[1];
+	layer = (vopt->val[2] << 8) | vopt->val[3];
+	printf("Received a PXE Boot Server Request. Server Type: %04X, Layer: %04x\n", svrtyp, layer);
+	int i;
+	const struct boot_item *myitem = sinf->boot_option->bitems;
+	for (i = 0; i < sinf->boot_option->n_bitems; i++, myitem++)
+		if (myitem->index == svrtyp)
+			break;
+	if (i == sinf->boot_option->n_bitems) {
+		if (sinf->verbose)
+			elog("Not a request to me.\n");
+		return retv;
+	}
+	if (myitem->clarch != pxec.arch) {
+		elog("Logic Error, arch: %d not supported.\n", pxec.arch);
+		return retv;
+	}
+
+	offer = malloc(pxec.maxlen);
+	offer->maxlen = pxec.maxlen;
+	offer->len = 0;
+	pkt = &offer->pkt;
+	memcpy(&pkt->header, &dhdat->pkt.header, sizeof(struct dhcp_head));
+	pkt->header.op = DHCP_REP;
+	memcpy(&pkt->header.siaddr, &sinf->sin_addr, 4);
+	strcpy(pkt->header.sname, sinf->ipaddr);
+	strcpy(pkt->header.bootfile, myitem->bootfile);
+
+	mopt = pkt->options;
+	mopt->code = DHCP_MSGTYPE;
+	mopt->len = 1;
+	mopt->val[0] = DHCP_ACK;
+	mopt = dhcp_option_next(mopt);
+	mopt->code = DHCP_SVRID;
+	mopt->len = 4;
+	memcpy(mopt->val, &sinf->sin_addr, mopt->len);
+	mopt = dhcp_option_next(mopt);
+	mopt->code = DHCP_CMUID;
+	mopt->len = 17;
+	mopt->val[0] = 0;
+	memcpy(mopt->val+1, pxec.uuid, sizeof(pxec.uuid));
+	mopt = dhcp_option_next(mopt);
+	mopt->code = DHCP_CLASS;
+	mopt->len = 9;
+	memcpy(mopt->val, "PXEClient", mopt->len);
+	mopt = dhcp_option_next(mopt);
+	mopt->code = DHCP_SVRNAME;
+	mopt->len = strlen(sinf->ipaddr);
+	memcpy(mopt->val, sinf->ipaddr, mopt->len);
+	mopt = dhcp_option_next(mopt);
+	mopt->code = DHCP_BOOTFILE;
+	mopt->len = strlen(myitem->bootfile);
+	memcpy(mopt->val, myitem->bootfile, mopt->len);
+
+	mopt = dhcp_option_next(mopt);
+	mopt->code = DHCP_VENDOR;
+
+	venlen = 0;
+	sopt = (struct dhcp_option *)mopt->val;
+	sopt->code = PXE_BOOTITEM;
+	sopt->len = 4;
+	sopt->val[0] = svrtyp >> 8;
+	sopt->val[1] = svrtyp & 0x0ff;
+	sopt->val[2] = layer >> 8;
+	sopt->val[3] = layer & 0x0ff;
+	sopt = dhcp_option_next(sopt);
+	sopt->code = PXE_END;
+	venlen = 7;
+	mopt->len = venlen;
+
+	mopt = dhcp_option_next(mopt);
+	mopt->code = DHCP_END;
+	optlen = &mopt->code - (uint8_t *)pkt->options + 1;
+	offer->len = sizeof(struct dhcp_head) + optlen;
+	if (sinf->flog) {
+		fwrite(&offer->len, sizeof(offer->len), 1, sinf->flog);
+		fwrite(pkt, 1, offer->len, sinf->flog);
+	}
+	if (sinf->verbose)
+		dhcp_echo_packet(offer);
+	retv = sendto(sockd, pkt, offer->len, 0, src, sizeof(struct sockaddr_in));
+	if (retv == -1)
+		elog("Failed to send offer: %s\n", strerror(errno));
+	free(offer);
+	return retv;
+}
+
+static int request_packet_process(const struct server_info *sinf, int sockd,
+		struct dhcp_data *dhdat)
+{
+	int len, buflen = dhdat->maxlen;
+	struct sockaddr_in srcaddr;
+	socklen_t socklen;
+	char *buf = (char *)&dhdat->pkt;
+	const struct dhcp_option *copt;
+	int retv = 0;
+
+	dhdat->len = 0;
+	socklen = sizeof(srcaddr);
+	memset(&srcaddr, 0, socklen);
+	len = recvfrom(sockd, buf, buflen, 0, (struct sockaddr *)&srcaddr,
+			&socklen);
+	if (len <= 0) {
+		elog("recvfrom failed: %s\n", strerror(errno));
+		return len;
+	}
+	dhdat->len = len;
+	if (!dhcp_pxe(dhdat)) {
+		if (sinf->verbose)
+			elog("Not a PXE packet, Ignored.\n");
+		return retv;
+	}
+	copt = dhcp_option_search(dhdat, DHCP_MSGTYPE);
+	if (!copt || (copt->val[0] != DHCP_REQUEST &&
+				copt->val[0] != DHCP_INFORM)) {
+		if (sinf->verbose)
+			elog("Not PXE Boot Server request/inform, Ignored.\n");
+		return retv;
+	}
+
+	if (socklen > sizeof(srcaddr))
+		elog("Warning: address size too large %d\n", socklen);
+
+	if (sinf->flog) {
+		fwrite(&len, sizeof(len), 1, sinf->flog);
+		fwrite(buf, 1, len, sinf->flog);
+	}
+	len = ack_pxe(sinf, sockd, &srcaddr, dhdat);
+	return len;
+}
+void * get_pxe_request(void *data)
+{
+	struct thread_param *arg = data;
+	struct dhcp_data *dhdat;
+	int sysret;
+
+	dhdat = malloc(2048);
+	if (!dhdat) {
+		elog("Out of Memory!\n");
+		arg->retcode = 100;
+		return NULL;
+	}
+	dhdat->maxlen = 2048 - offsetof(struct dhcp_data, pkt);
+
 	do {
-		nanosleep(&itv, NULL);
+		sysret = poll(&arg->pfd, 1, 1000);
+		if (sysret == -1 && errno != EINTR) {
+			elog("poll failed: %s\n", strerror(errno));
+			global_exit = 1;
+			continue;
+		} else if ((sysret == -1 && errno == EINTR) || sysret == 0)
+			continue;
+		if (arg->pfd.revents == 0)
+			continue;
+
+		arg->pfd.revents = 0;
+		sysret = request_packet_process(arg->sinf, arg->pfd.fd, dhdat);
+		
 	} while (global_exit == 0);
+
+	free(dhdat);
 	return NULL;
 }
 
@@ -270,6 +466,7 @@ int main(int argc, char *argv[])
 	struct server_info sinfo;
 	struct thread_param parm[2];
 	pthread_t th67, th4011;
+	static const struct timespec itv = {.tv_sec = 1, .tv_nsec = 0};
 
 	sinfo.verbose = 0;
 	sinfo.flog = NULL;
@@ -348,6 +545,12 @@ int main(int argc, char *argv[])
 		elog("Cannot get IP address of %s.\n", iface);
 		goto exit_10;
 	}
+	if (!inet_ntop(AF_INET, &sinfo.sin_addr, sinfo.ipaddr,
+				sizeof(sinfo.ipaddr))) {
+		elog("Cannot convert network address to string.\n");
+		retv = 8;
+		goto exit_10;
+	}
 
 	parm[0].sinf = &sinfo;
 	parm[0].retcode = 0;
@@ -365,6 +568,10 @@ int main(int argc, char *argv[])
 		pthread_join(th67, NULL);
 		goto exit_10;
 	}
+
+	do
+		nanosleep(&itv, NULL);
+	while (global_exit == 0);
 
 	pthread_join(th67, NULL);
 	pthread_join(th4011, NULL);
