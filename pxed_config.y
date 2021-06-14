@@ -35,9 +35,8 @@ static int file_ok(const char *filename);
 %token <strval>	PHRASE
 %token <strval>	PATH
 %token <strval>	DIRECT
-%token <strval>	IPADDR
 
-%token	TX86_64_EFI TX86_BIOS TIA64_EFI NL IP LOG COMMENT
+%token	TX86_64_EFI TX86_BIOS TIA64_EFI NL LOG COMMENT
 %left	DESC BOOT_FILE TFTP_ROOT TMOUT PROMPT
 %nonassoc	SETTO
 
@@ -69,7 +68,7 @@ line:	NL
 logfile: LOG SETTO PATH {strncpy(b_opt.logfile, $3, MAX_PATH);}
        ;
 
-bspec:	client desc bootfile ip
+bspec:	client desc bootfile
 	;
 
 client:	TX86_64_EFI {b_opt.bitems[noboot].clarch = X86_64_EFI;}
@@ -83,9 +82,6 @@ bootfile: BOOT_FILE SETTO PATH {strncpy(b_opt.bitems[noboot].bootfile, $3, MAX_P
 
 desc:	DESC SETTO WORD {strncpy(b_opt.bitems[noboot].desc, $3, MAX_PHRASE);}
 	| DESC SETTO PHRASE {strncpy(b_opt.bitems[noboot].desc, $3, MAX_PHRASE);}
-	;
-
-ip:	IP SETTO IPADDR {strncpy(b_opt.bitems[noboot].ipaddr, $3, MAX_PHRASE);}
 	;
 
 tftp_root: TFTP_ROOT SETTO PATH {strncpy(tftp_root, $3, sizeof(tftp_root));}
@@ -138,7 +134,7 @@ exit_10:
 extern FILE *yyin;
 extern int yyparse(void);
 
-int pxed_config(const char *confname)
+int pxed_config(const char *confname, int verbose)
 {
 	int retc, retv, i;
 	struct boot_item *btm;
@@ -159,6 +155,9 @@ int pxed_config(const char *confname)
 		return -2;
 	}
 
+	if (verbose == 0)
+		return 0;
+
 	b_opt.n_bitems = noboot;
 	printf("TFTP Root: %s\n", tftp_root);
 	printf("Timeout: %d\n", bopt->timeout);
@@ -171,13 +170,6 @@ int pxed_config(const char *confname)
 		printf("\tClient Type: %d\n", (int)btm->clarch);
 		printf("\tDescription: %s\n", btm->desc);
 		printf("\tBoot File: %s\n", btm->bootfile);
-		printf("\tIP Address: %s\n", btm->ipaddr);
-		retc = inet_pton(AF_INET, btm->ipaddr, &btm->ip);
-		if (retc != 1) {
-			fprintf(stderr, "Cannot convert %s to integer.\n",
-					btm->ipaddr);
-			retv = -3;
-		}
 	}
 	return retv;
 }

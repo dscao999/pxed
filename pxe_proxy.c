@@ -118,7 +118,7 @@ static int offer_pxe(const struct server_info *sinf, int sockd,
 		sopt->val[sublen+0] = vitems[i]->index >> 8;
 		sopt->val[sublen+1] = vitems[i]->index & 0x0ff;
 		sopt->val[sublen+2] = 1;
-		memcpy(sopt->val+3+sublen, &vitems[i]->ip, 4);
+		memcpy(sopt->val+3+sublen, &sinf->sin_addr, 4);
 		sublen += 7;
 	}
 	venlen += sublen + 2;
@@ -293,7 +293,7 @@ static int ack_pxe(const struct server_info *sinf, int sockd,
 	}
 	svrtyp = (vopt->val[0] << 8) | vopt->val[1];
 	layer = (vopt->val[2] << 8) | vopt->val[3];
-	printf("Received a PXE Boot Server Request. Server Type: %04X, Layer: %04x\n", svrtyp, layer);
+
 	int i;
 	const struct boot_item *myitem = sinf->boot_option->bitems;
 	for (i = 0; i < sinf->boot_option->n_bitems; i++, myitem++)
@@ -510,7 +510,7 @@ int main(int argc, char *argv[])
 	}
 	if (!config)
 		config = "/etc/pxed.conf";
-	retv = pxed_config(config);
+	retv = pxed_config(config, sinfo.verbose);
 	if (retv != 0) {
 		elog("Cannot parse configuration file: %s\n", config);
 		return 1;

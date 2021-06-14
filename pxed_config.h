@@ -21,8 +21,6 @@ enum client_arch {
 struct boot_item {
 	char desc[MAX_PHRASE];
 	char bootfile[MAX_PATH];
-	char ipaddr[MAX_PHRASE];
-	unsigned int ip;
 	unsigned short clarch;
 	unsigned short index;
 };
@@ -37,6 +35,6 @@ struct boot_option {
 
 extern const struct boot_option *bopt;
 
-int pxed_config(const char *confname);
+int pxed_config(const char *confname, int verbose);
 
 #endif /* PXED_CONFIG_DSCAO__ */
