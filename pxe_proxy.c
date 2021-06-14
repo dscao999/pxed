@@ -27,7 +27,6 @@ void sig_handler(int sig)
 struct server_info {
 	const struct boot_option *boot_option;
 	struct in_addr sin_addr;
-	int sockd;
 	int verbose;
 	FILE *flog;
 };
@@ -37,7 +36,8 @@ struct pxe_client {
 	uint16_t maxlen;
 };
 
-static int check_packet(struct server_info *sinf, const struct sockaddr_in *src,
+static int offer_pxe(struct server_info *sinf, int sockd,
+		const struct sockaddr_in *src,
 		const struct dhcp_data *dhdat)
 {
 	int retv = 0, venlen, sublen, optlen;
@@ -159,14 +159,15 @@ static int check_packet(struct server_info *sinf, const struct sockaddr_in *src,
 	if (sinf->verbose)
 		dhcp_echo_packet(offer);
 	
-	retv = sendto(sinf->sockd, pkt, offer->len, 0,
+	retv = sendto(sockd, pkt, offer->len, 0,
 			src, sizeof(struct sockaddr_in));
 	if (retv == -1)
 		elog("Failed to send offer: %s\n", strerror(errno));
 	return retv;
 }
 
-static int packet_process(struct server_info *sinf, struct dhcp_data *dhdat)
+static int packet_process(struct server_info *sinf, int sockd,
+		struct dhcp_data *dhdat)
 {
 	int len, buflen = dhdat->maxlen;
 	struct sockaddr_in srcaddr;
@@ -177,7 +178,7 @@ static int packet_process(struct server_info *sinf, struct dhcp_data *dhdat)
 	dhdat->len = 0;
 	socklen = sizeof(srcaddr);
 	memset(&srcaddr, 0, socklen);
-	len = recvfrom(sinf->sockd, buf, buflen, 0,
+	len = recvfrom(sockd, buf, buflen, 0,
 			(struct sockaddr *)&srcaddr, &socklen);
 	if (len <= 0) {
 		elog("recvfrom failed: %s\n", strerror(errno));
@@ -205,7 +206,7 @@ static int packet_process(struct server_info *sinf, struct dhcp_data *dhdat)
 	if (sinf->verbose)
 		dhcp_echo_packet(dhdat);
 	inet_pton(AF_INET, "255.255.255.255", &srcaddr.sin_addr);
-	len = check_packet(sinf, &srcaddr, dhdat);
+	len = offer_pxe(sinf, sockd, &srcaddr, dhdat);
 	return len;
 }
 
@@ -213,7 +214,6 @@ static int packet_process(struct server_info *sinf, struct dhcp_data *dhdat)
 int main(int argc, char *argv[])
 {
 	int retv, sysret, fin, c;
-	struct pollfd pfd;
 	struct sigaction sigact;
 	struct dhcp_data *dhdat;
 	const char *iface = NULL, *config = NULL;
@@ -221,6 +221,7 @@ int main(int argc, char *argv[])
 	extern char *optarg;
 	extern int opterr, optopt;
 	struct server_info sinfo;
+	struct pollfd pfd[2];
 
 	sinfo.verbose = 0;
 	sinfo.flog = NULL;
@@ -292,12 +293,11 @@ int main(int argc, char *argv[])
 	}
 	dhdat->maxlen = 2048 - offsetof(struct dhcp_data, pkt);
 
-	retv = poll_init(&pfd, 67, iface);
+	retv = poll_init(pfd, 67, iface);
 	if (retv != 0)
 		goto exit_10;
 
-	sinfo.sockd = pfd.fd;
-	retv = get_nicaddr(pfd.fd, iface, &sinfo.sin_addr);
+	retv = get_nicaddr(pfd[0].fd, iface, &sinfo.sin_addr);
 	if (retv != 0) {
 		elog("Cannot get IP address of %s.\n", iface);
 		goto exit_20;
@@ -305,22 +305,22 @@ int main(int argc, char *argv[])
 
 	global_exit = 0;
 	do {
-		sysret = poll(&pfd, 1, 1000);
+		sysret = poll(pfd, 1, 1000);
 		if (sysret == -1 && errno != EINTR) {
 			elog("poll failed: %s\n", strerror(errno));
 			retv = 10;
 			goto exit_20;
 		} else if ((sysret == -1 && errno == EINTR) || sysret == 0)
 			continue;
-		if (pfd.revents == 0)
+		if (pfd[0].revents == 0)
 			continue;
 
-		pfd.revents = 0;
-		packet_process(&sinfo, dhdat);
+		pfd[0].revents = 0;
+		packet_process(&sinfo, pfd[0].fd, dhdat);
 	} while (global_exit == 0);
 
 exit_20:
-	close(pfd.fd);
+	close(pfd[0].fd);
 exit_10:
 	free(dhdat);
 	if (sinfo.flog)
