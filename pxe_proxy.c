@@ -10,6 +10,7 @@
 #include <time.h>
 #include <signal.h>
 #include <assert.h>
+#include <pthread.h>
 #include <net/if.h>
 #include "miscs.h"
 #include "dhcp.h"
@@ -36,7 +37,7 @@ struct pxe_client {
 	uint16_t maxlen;
 };
 
-static int offer_pxe(struct server_info *sinf, int sockd,
+static int offer_pxe(const struct server_info *sinf, int sockd,
 		const struct sockaddr_in *src,
 		const struct dhcp_data *dhdat)
 {
@@ -166,7 +167,7 @@ static int offer_pxe(struct server_info *sinf, int sockd,
 	return retv;
 }
 
-static int packet_process(struct server_info *sinf, int sockd,
+static int discover_packet_process(const struct server_info *sinf, int sockd,
 		struct dhcp_data *dhdat)
 {
 	int len, buflen = dhdat->maxlen;
@@ -210,18 +211,65 @@ static int packet_process(struct server_info *sinf, int sockd,
 	return len;
 }
 
+struct thread_param {
+	const struct server_info *sinf;
+	struct pollfd pfd;
+	int retcode;
+};
+
+void * get_pxe_discover(void *data)
+{
+	struct thread_param *arg = data;
+	struct dhcp_data *dhdat;
+	int sysret;
+
+	dhdat = malloc(2048);
+	if (!dhdat) {
+		elog("Out of Memory!\n");
+		arg->retcode = 100;
+		return NULL;
+	}
+	dhdat->maxlen = 2048 - offsetof(struct dhcp_data, pkt);
+
+	do {
+		sysret = poll(&arg->pfd, 1, 1000);
+		if (sysret == -1 && errno != EINTR) {
+			elog("poll failed: %s\n", strerror(errno));
+			goto exit_10;
+		} else if ((sysret == -1 && errno == EINTR) || sysret == 0)
+			continue;
+		if (arg->pfd.revents == 0)
+			continue;
+
+		arg->pfd.revents = 0;
+		discover_packet_process(arg->sinf, arg->pfd.fd, dhdat);
+	} while (global_exit == 0);
+
+exit_10:
+	free(dhdat);
+	return NULL;
+}
+
+void * get_pxe_request(void *arg)
+{
+	static const struct timespec itv = {.tv_sec = 0, .tv_nsec = 200000000};
+	do {
+		nanosleep(&itv, NULL);
+	} while (global_exit == 0);
+	return NULL;
+}
 
 int main(int argc, char *argv[])
 {
-	int retv, sysret, fin, c;
+	int retv, fin, c;
 	struct sigaction sigact;
-	struct dhcp_data *dhdat;
 	const char *iface = NULL, *config = NULL;
 	static char ifname[32];
 	extern char *optarg;
 	extern int opterr, optopt;
 	struct server_info sinfo;
-	struct pollfd pfd[2];
+	struct thread_param parm[2];
+	pthread_t th67, th4011;
 
 	sinfo.verbose = 0;
 	sinfo.flog = NULL;
@@ -286,43 +334,47 @@ int main(int argc, char *argv[])
 					bopt->logfile, strerror(errno));
 	}
 	
-	dhdat = malloc(2048);
-	if (!dhdat) {
-		elog("Out of Memory!\n");
-		return 100;
-	}
-	dhdat->maxlen = 2048 - offsetof(struct dhcp_data, pkt);
-
-	retv = poll_init(pfd, 67, iface);
+	parm[0].pfd.fd = -1;
+	parm[1].pfd.fd = -1;
+	retv = poll_init(&parm[0].pfd, 67, iface);
+	if (retv != 0)
+		goto exit_10;
+	retv = poll_init(&parm[1].pfd, 4011, iface);
 	if (retv != 0)
 		goto exit_10;
 
-	retv = get_nicaddr(pfd[0].fd, iface, &sinfo.sin_addr);
+	retv = get_nicaddr(parm[0].pfd.fd, iface, &sinfo.sin_addr);
 	if (retv != 0) {
 		elog("Cannot get IP address of %s.\n", iface);
-		goto exit_20;
+		goto exit_10;
 	}
 
-	global_exit = 0;
-	do {
-		sysret = poll(pfd, 1, 1000);
-		if (sysret == -1 && errno != EINTR) {
-			elog("poll failed: %s\n", strerror(errno));
-			retv = 10;
-			goto exit_20;
-		} else if ((sysret == -1 && errno == EINTR) || sysret == 0)
-			continue;
-		if (pfd[0].revents == 0)
-			continue;
+	parm[0].sinf = &sinfo;
+	parm[0].retcode = 0;
+	parm[1].sinf = &sinfo;
+	parm[1].retcode = 0;
+	retv = pthread_create(&th67, NULL, get_pxe_discover, parm);
+	if (retv) {
+		elog("Cannot create thread: %s\n", strerror(retv));
+		goto exit_10;
+	}
+	retv = pthread_create(&th4011, NULL, get_pxe_request, parm+1);
+	if (retv) {
+		elog("Cannot create thread: %s\n", strerror(retv));
+		pthread_kill(th67, SIGTERM);
+		pthread_join(th67, NULL);
+		goto exit_10;
+	}
 
-		pfd[0].revents = 0;
-		packet_process(&sinfo, pfd[0].fd, dhdat);
-	} while (global_exit == 0);
+	pthread_join(th67, NULL);
+	pthread_join(th4011, NULL);
 
-exit_20:
-	close(pfd[0].fd);
+
 exit_10:
-	free(dhdat);
+	if (parm[0].pfd.fd > 0)
+		close(parm[0].pfd.fd);
+	if (parm[1].pfd.fd > 0)
+		close(parm[1].pfd.fd);
 	if (sinfo.flog)
 		fclose(sinfo.flog);
 	return retv;

@@ -5,8 +5,8 @@ endif
 
 .PHONEY:	all clean release
 
-CFLAGS = -pedantic -W -Wall -D_GNU_SOURCE -g
-LDFLAGS = -g
+CFLAGS = -pedantic -W -Wall -D_GNU_SOURCE -g -pthread
+LDFLAGS = -g -pthread
 
 #all:	pxed retv pxem conftx
 all:	pxem pxe_proxy pxe_boot
