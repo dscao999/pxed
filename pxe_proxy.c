@@ -222,7 +222,8 @@ static int discover_packet_process(const struct server_info *sinf, int sockd,
 	}
 	if (sinf->verbose)
 		dhcp_echo_packet(dhdat, ctm);
-	inet_pton(AF_INET, "255.255.255.255", &srcaddr.sin_addr);
+	if (srcaddr.sin_addr.s_addr == 0)
+		inet_pton(AF_INET, "255.255.255.255", &srcaddr.sin_addr);
 	len = offer_pxe(sinf, sockd, &srcaddr, dhdat);
 	return len;
 }
