@@ -5,7 +5,6 @@
 #include <assert.h>
 #include <stdlib.h>
 #include <stdarg.h>
-#include <time.h>
 #include "dhcp.h"
 
 static const uint8_t dhcp_cookie[] = {99, 130, 83, 99};
@@ -321,16 +320,14 @@ static int dhcp_echo_option(const struct dhcp_option *opt)
 	return len;
 }
 
-int dhcp_echo_packet(const struct dhcp_data *dhdat)
+int dhcp_echo_packet(const struct dhcp_data *dhdat, time_t ctm)
 {
 	const struct dhcp_packet *dhcp;
 	const struct dhcp_option *opt;
-	struct timespec ctm;
 	int len;
 
 	dhcp = &dhdat->pkt;
-	clock_gettime(CLOCK_MONOTONIC_COARSE, &ctm);
-	llog("======================Time Stamp:%09lu.%03lu", ctm.tv_sec, ctm.tv_nsec / 1000000);
+	llog("======================Time Stamp:%09lu", ctm);
 	llog("======================\n");
 	if (!dhcp_valid(dhdat)) {
 		printf("Not a valid DHCP packet!\n");

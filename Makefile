@@ -9,7 +9,7 @@ CFLAGS = -pedantic -W -Wall -D_GNU_SOURCE -g -pthread
 LDFLAGS = -g -pthread
 
 #all:	pxed retv pxem conftx
-all:	pxem pxe_proxy pxe_boot
+all:	pxem pxe_proxy pxe_boot retrv
 
 srcs = $(wildcard *.c)
 deps = $(srcs:.c=.d)
@@ -29,7 +29,7 @@ pxe_boot: pxe_bootsvr.o dhcp.o
 pxed:	pxed.o dhcp.o miscs.o pxed_config.tab.o lex.yy.o
 	$(LINK.o) $^ -o $@
 
-retv:	retrieve.o dhcp.o
+retrv:	retrieve.o dhcp.o
 	$(LINK.o) $^ -o $@
 
 lex.yy.c: pxed_config.lex

@@ -154,11 +154,11 @@ int pxed_config(const char *confname, int verbose)
 		fprintf(stderr, "Configuration File Error: %d\n", retc);
 		return -2;
 	}
+	b_opt.n_bitems = noboot;
 
 	if (verbose == 0)
 		return 0;
 
-	b_opt.n_bitems = noboot;
 	printf("TFTP Root: %s\n", tftp_root);
 	printf("Timeout: %d\n", bopt->timeout);
 	printf("Prompt: %s\n", bopt->prompt);

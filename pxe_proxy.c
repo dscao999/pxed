@@ -47,6 +47,7 @@ static int offer_pxe(const struct server_info *sinf, int sockd,
 	struct dhcp_option *mopt, *sopt;
 	struct dhcp_data *offer;
 	struct dhcp_packet *pkt;
+	time_t ctm;
 
 	opt = dhcp_option_search(dhdat, DHCP_CUUID);
 	if (!opt) {
@@ -112,6 +113,12 @@ static int offer_pxe(const struct server_info *sinf, int sockd,
 		if (sinf->boot_option->bitems[i].clarch == pxec.arch)
 			vitems[count++] = &sinf->boot_option->bitems[i];
 	}
+	if (count == 0) {
+		elog("No support for arch: %04X in %d supported items.\n",
+				pxec.arch, sinf->boot_option->n_bitems);
+		retv = -4;
+		goto exit_10;
+	}
 	sopt->len = count * 7;
 	sublen = 0;
 	for (i = 0; i < count; i++) {
@@ -153,17 +160,23 @@ static int offer_pxe(const struct server_info *sinf, int sockd,
 	mopt->code = DHCP_END;
 	optlen = &mopt->code - (uint8_t *)pkt->options + 1;
 	offer->len = sizeof(struct dhcp_head) + optlen;
+
+	ctm= time(NULL);
 	if (sinf->flog) {
+		fwrite(&ctm, sizeof(ctm), 1, sinf->flog);
 		fwrite(&offer->len, sizeof(offer->len), 1, sinf->flog);
 		fwrite(pkt, 1, offer->len, sinf->flog);
 	}
 	if (sinf->verbose)
-		dhcp_echo_packet(offer);
+		dhcp_echo_packet(offer, ctm);
 	
 	retv = sendto(sockd, pkt, offer->len, 0,
 			src, sizeof(struct sockaddr_in));
 	if (retv == -1)
 		elog("Failed to send offer: %s\n", strerror(errno));
+
+exit_10:
+	free(offer);
 	return retv;
 }
 
@@ -175,6 +188,7 @@ static int discover_packet_process(const struct server_info *sinf, int sockd,
 	socklen_t socklen;
 	char *buf = (char *)&dhdat->pkt;
 	const struct dhcp_option *copt;
+	time_t ctm;
 
 	dhdat->len = 0;
 	socklen = sizeof(srcaddr);
@@ -200,12 +214,14 @@ static int discover_packet_process(const struct server_info *sinf, int sockd,
 
 	if (socklen > sizeof(srcaddr))
 		elog("Warning: address size too large %d\n", socklen);
+	ctm= time(NULL);
 	if (sinf->flog) {
-		fwrite(&len, sizeof(int), 1, sinf->flog);
-		fwrite(buf, 1, len, sinf->flog);
+		fwrite(&ctm, sizeof(ctm), 1, sinf->flog);
+		fwrite(&dhdat->len, sizeof(dhdat->len), 1, sinf->flog);
+		fwrite(buf, 1, dhdat->len, sinf->flog);
 	}
 	if (sinf->verbose)
-		dhcp_echo_packet(dhdat);
+		dhcp_echo_packet(dhdat, ctm);
 	inet_pton(AF_INET, "255.255.255.255", &srcaddr.sin_addr);
 	len = offer_pxe(sinf, sockd, &srcaddr, dhdat);
 	return len;
@@ -260,6 +276,7 @@ static int ack_pxe(const struct server_info *sinf, int sockd,
 	struct dhcp_data *offer;
 	struct dhcp_packet *pkt;
 	uint16_t svrtyp, layer;
+	time_t ctm;
 
 	opt = dhcp_option_search(dhdat, DHCP_CUUID);
 	if (!opt) {
@@ -365,12 +382,14 @@ static int ack_pxe(const struct server_info *sinf, int sockd,
 	mopt->code = DHCP_END;
 	optlen = &mopt->code - (uint8_t *)pkt->options + 1;
 	offer->len = sizeof(struct dhcp_head) + optlen;
+	ctm= time(NULL);
 	if (sinf->flog) {
+		fwrite(&ctm, sizeof(ctm), 1, sinf->flog);
 		fwrite(&offer->len, sizeof(offer->len), 1, sinf->flog);
 		fwrite(pkt, 1, offer->len, sinf->flog);
 	}
 	if (sinf->verbose)
-		dhcp_echo_packet(offer);
+		dhcp_echo_packet(offer, ctm);
 	retv = sendto(sockd, pkt, offer->len, 0, src, sizeof(struct sockaddr_in));
 	if (retv == -1)
 		elog("Failed to send offer: %s\n", strerror(errno));
@@ -387,6 +406,7 @@ static int request_packet_process(const struct server_info *sinf, int sockd,
 	char *buf = (char *)&dhdat->pkt;
 	const struct dhcp_option *copt;
 	int retv = 0;
+	time_t ctm;
 
 	dhdat->len = 0;
 	socklen = sizeof(srcaddr);
@@ -414,10 +434,14 @@ static int request_packet_process(const struct server_info *sinf, int sockd,
 	if (socklen > sizeof(srcaddr))
 		elog("Warning: address size too large %d\n", socklen);
 
+	ctm= time(NULL);
 	if (sinf->flog) {
-		fwrite(&len, sizeof(len), 1, sinf->flog);
-		fwrite(buf, 1, len, sinf->flog);
+		fwrite(&ctm, sizeof(ctm), 1, sinf->flog);
+		fwrite(&dhdat->len, sizeof(dhdat->len), 1, sinf->flog);
+		fwrite(buf, 1, dhdat->len, sinf->flog);
 	}
+	if (sinf->verbose)
+		dhcp_echo_packet(dhdat, ctm);
 	len = ack_pxe(sinf, sockd, &srcaddr, dhdat);
 	return len;
 }

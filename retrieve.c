@@ -1,54 +1,48 @@
 #include <stdio.h>
 #include <errno.h>
 #include <string.h>
-#include "misc.h"
+#include <time.h>
+#include "miscs.h"
 #include "dhcp.h"
-
-static inline int retrieve_packet (char *packet, FILE *flog)
-{
-        uint32_t len;
-        int pktlen, bytes;
-        if (flog == NULL) return 0;
-        fread (&len, sizeof (len), 1, flog);
-        if (feof (flog)) return 0;
-        pktlen = ntohl (len);
-        bytes = fread (packet, 1, pktlen, flog);
-        if (bytes != pktlen) {
-                errlog("Corrupted log!\n");
-                bytes = -1;
-        }
-        return bytes;
-}
 
 static char buffer[1600];
 
 int main(int argc, char *argv[])
 {
-	int retv, num;
+	int retv, bytes;
 	char *logfile;
 	FILE *inf;
-	dhcp_buff_t pkt;
+	struct dhcp_data *dhdat;
+	time_t ctm;
 
 	retv = 0;
-	if (argc > 1) logfile = argv[1];
+	if (argc > 1)
+		logfile = argv[1];
 	else {
-		errlog("Usage: retv logfile\n");
+		elog("Usage: %s logfile\n", argv[0]);
 		retv = 4;
 		goto z_exit;
 	}
-	pkt.maxlen = sizeof(buffer);
-	pkt.packet = (dhcp_packet_t *)buffer;
+	dhdat = (struct dhcp_data *)buffer;
+	dhdat->maxlen = sizeof(buffer) - 4;
 	
 	inf = fopen(logfile, "rb");
 	if (!inf) {
-		errlog("Cannot open %s: %s\n", logfile, strerror(errno));
+		elog("Cannot open %s: %s\n", logfile, strerror(errno));
 		retv = 8;
 		goto z_exit;
 	}
 
-	while ((num = retrieve_packet((char *)pkt.packet, inf)) > 0) {
-		pkt.len = num;
-		dhcp_dump_packet(&pkt, stdout);
+	fread(&ctm, sizeof(ctm), 1, inf);
+	while (!feof(inf)) {
+		fread(&dhdat->len, sizeof(dhdat->len), 1, inf);
+	        bytes = fread(&dhdat->pkt, 1, dhdat->len, inf);
+		if (bytes != dhdat->len) {
+			elog("Corrutped PXE packet log.\n");
+			break;
+		}
+		dhcp_echo_packet(dhdat, ctm);
+		fread(&ctm, sizeof(ctm), 1, inf);
 	}
 
 	fclose(inf);

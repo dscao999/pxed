@@ -1,6 +1,7 @@
 #ifndef DHCP_DSCAO__
 #define DHCP_DSCAO__
 #include <stdint.h>
+#include <time.h>
 
 #define DHCP_REQ	1
 #define DHCP_REP	2
@@ -91,6 +92,6 @@ struct dhcp_option *dhcp_option_next(struct dhcp_option *option)
 
 const struct dhcp_option *
 dhcp_option_search(const struct dhcp_data *dhdat, int opt);
-int dhcp_echo_packet(const struct dhcp_data *dhdat);
+int dhcp_echo_packet(const struct dhcp_data *dhdat, time_t ctm);
 
 #endif /* DHCP_DSCAO__ */
