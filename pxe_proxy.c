@@ -576,6 +576,7 @@ int main(int argc, char *argv[])
 		retv = 8;
 		goto exit_10;
 	}
+	printf("Monitoring NIC: %s, IP: %s\n", iface, sinfo.ipaddr);
 
 	parm[0].sinf = &sinfo;
 	parm[0].retcode = 0;
