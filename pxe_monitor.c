@@ -82,6 +82,7 @@ static int packet_process(int sockd, struct dhcp_data *dhdat, FILE *fout)
 	struct sockaddr_in srcaddr;
 	socklen_t socklen;
 	char *buf = (char *)&dhdat->pkt;
+	time_t ctm;
 
 	dhdat->len = 0;
 	socklen = sizeof(srcaddr);
@@ -95,7 +96,8 @@ static int packet_process(int sockd, struct dhcp_data *dhdat, FILE *fout)
 	if (fout)
 		fwrite(buf, 1, len, fout);
 	dhdat->len = len;
-	dhcp_echo_packet(dhdat);
+	ctm = time(NULL);
+	dhcp_echo_packet(dhdat, ctm);
 	return len;
 }
 

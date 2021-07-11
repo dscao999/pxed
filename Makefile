@@ -17,16 +17,10 @@ deps = $(srcs:.c=.d)
 conftx: conf_test.o  pxed_config.tab.o lex.yy.o miscs.o
 	$(LINK.o) $^ -o $@
 
-pxem:	pxe_monitor.o dhcp.o miscs.o
+pxem:	pxe_monitor.o dhcp.o
 	$(LINK.o) $^ -o $@
 
 pxe_proxy: pxe_proxy.o dhcp.o pxed_config.tab.o lex.yy.o net_utils.o
-	$(LINK.o) $^ -o $@
-
-pxe_boot: pxe_bootsvr.o dhcp.o
-	$(LINK.o) $^ -o $@
-
-pxed:	pxed.o dhcp.o miscs.o pxed_config.tab.o lex.yy.o
 	$(LINK.o) $^ -o $@
 
 retrv:	retrieve.o dhcp.o

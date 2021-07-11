@@ -1,6 +1,7 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/ioctl.h>
+#include <sys/stat.h>
 #include <string.h>
 #include <netdb.h>
 #include <dirent.h>
@@ -13,8 +14,10 @@
 int get_first_nic(char *buf)
 {
 	DIR *dir;
-	int retv = 0, found;
+	int retv = 0, found, sysret;
 	struct dirent *ent;
+	char nic_syspath[128];
+	struct stat mst;
 	static const char *netdir = "/sys/class/net";
 
 	dir = opendir(netdir);
@@ -30,6 +33,13 @@ int get_first_nic(char *buf)
 		if ((ent->d_type & DT_LNK) == 0)
 			goto next_nic;
 		if (strcmp(ent->d_name, "lo") == 0)
+			goto next_nic;
+		strcpy(nic_syspath, netdir);
+		strcat(nic_syspath, "/");
+		strcat(nic_syspath, ent->d_name);
+		strcat(nic_syspath, "/wireless");
+		sysret = stat(nic_syspath, &mst);
+		if (sysret == 0)
 			goto next_nic;
 		strcpy(buf, ent->d_name);
 		found = 1;
