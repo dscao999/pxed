@@ -1,3 +1,5 @@
+#include <stdio.h>
+#include <stdlib.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/ioctl.h>
@@ -14,11 +16,12 @@
 int get_first_nic(char *buf)
 {
 	DIR *dir;
-	int retv = 0, found, sysret;
+	int retv = 0, found, sysret, len, numb, type;
 	struct dirent *ent;
-	char nic_syspath[128];
+	char nic_syspath[128], typbuf[16];
 	struct stat mst;
 	static const char *netdir = "/sys/class/net";
+	FILE *fin;
 
 	dir = opendir(netdir);
 	if (!dir) {
@@ -37,10 +40,24 @@ int get_first_nic(char *buf)
 		strcpy(nic_syspath, netdir);
 		strcat(nic_syspath, "/");
 		strcat(nic_syspath, ent->d_name);
-		strcat(nic_syspath, "/wireless");
+		len = strlen(nic_syspath);
+		strcpy(nic_syspath+len, "/wireless");
 		sysret = stat(nic_syspath, &mst);
 		if (sysret == 0)
 			goto next_nic;
+		strcpy(nic_syspath+len, "/type");
+		fin = fopen(nic_syspath, "r");
+		if (!fin)
+			goto next_nic;
+		numb = fread(typbuf, 1, sizeof(typbuf), fin);
+		fclose(fin);
+		if (numb < 0)
+			goto next_nic;
+		typbuf[numb] = 0;
+		type = atoi(typbuf);
+		if (type != 1)
+			goto next_nic;
+
 		strcpy(buf, ent->d_name);
 		found = 1;
 		break;
