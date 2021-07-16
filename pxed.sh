@@ -12,6 +12,7 @@ sudo systemctl start apache2
 sudo systemctl start tftpd-hpa
 #sudo ./pxe_proxy -v -c pxed.conf > pxe_err.log 2>&1  &
 sudo ./pxe_proxy -v -c pxed.conf &
+sleep 3
 wait
 sudo systemctl stop tftpd-hpa
 sudo systemctl stop apache2
