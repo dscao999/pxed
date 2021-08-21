@@ -80,7 +80,7 @@ int get_nicaddr(int sockd, const char *iface, struct in_addr *addr)
 	strncpy(req.ifr_name, iface, IFNAMSIZ);
 	sysret = ioctl(sockd, SIOCGIFADDR, &req);
 	if (sysret == -1) {
-		elog("ioctl failed: %s\n", strerror(errno));
+		elog("ioctl failed for %s: %s\n", iface, strerror(errno));
 		return sysret;
 	}
 	ipv4_addr = (struct sockaddr_in *)&req.ifr_addr;
@@ -125,7 +125,7 @@ int poll_init(struct pollfd *pfd, int port, const char *iface)
 		}
 	}
 	retv = setsockopt(sockd, SOL_SOCKET, SO_BINDTODEVICE, iface,
-			sizeof(char *));
+			strlen(iface)+1);
 	if (retv == -1) {
 		elog("Cannot bind socket to device %s: %s\n", iface,
 				strerror(errno));
